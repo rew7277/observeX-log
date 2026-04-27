@@ -64,6 +64,13 @@ class AlertRule(db.Model):
     active     = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+class CustomEnvironment(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    name       = db.Column(db.String(40), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("user_id", "name", name="uq_user_environment"),)
+
 _db_init_lock = threading.Lock()
 
 def init_db_once():
@@ -106,6 +113,19 @@ def get_current_user():
         session.clear()
     return user
 
+DEFAULT_ENVIRONMENTS = ["PROD", "UAT", "SIT", "DEV", "PREPROD", "DR"]
+
+def get_user_environments(user):
+    custom = []
+    if user is not None:
+        custom = [e.name for e in CustomEnvironment.query.filter_by(user_id=user.id).order_by(CustomEnvironment.name.asc()).all()]
+    envs = []
+    for name in DEFAULT_ENVIRONMENTS + custom:
+        clean = (name or "").strip().upper()
+        if clean and clean not in envs:
+            envs.append(clean)
+    return envs
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -135,7 +155,13 @@ def percentile(values, pct):
 
 
 def detect_level(line: str):
-    if re.search(r"\b(ERROR|FATAL|SEVERE)\b|exception|failed|timeout|gateway timeout|bad request|\b5\d\d\b", line, re.I):
+    if re.search(r"\b(DEBUG|TRACE)\b", line, re.I):
+        return "DEBUG"
+    if re.search(r"\b(SUCCESS|SUCCEEDED|COMPLETED|OK)\b|\b2\d\d\b", line, re.I):
+        return "SUCCESS"
+    if re.search(r"\b(FAIL|FAILED|FAILURE)\b", line, re.I):
+        return "FAILURE"
+    if re.search(r"\b(ERROR|FATAL|SEVERE)\b|exception|timeout|gateway timeout|bad request|\b5\d\d\b", line, re.I):
         return "ERROR"
     if re.search(r"\b(WARN|WARNING)\b|retry|slow|\b4\d\d\b", line, re.I):
         return "WARN"
@@ -486,7 +512,7 @@ def dashboard():
     user = get_current_user()
     recent = LogSession.query.filter_by(user_id=user.id)                             .order_by(LogSession.created_at.desc()).limit(10).all()
     alerts = AlertRule.query.filter_by(user_id=user.id).all()
-    return render_template("dashboard.html", user=user, recent=recent, alerts=alerts)
+    return render_template("dashboard.html", user=user, recent=recent, alerts=alerts, environments=get_user_environments(user))
 
 # ── Log analysis ──────────────────────────────────────────────────────────────
 @app.route("/analyse", methods=["POST"])
@@ -647,6 +673,32 @@ def assistant_suggest():
     if not answer:
         answer.append("Try searches like level:ERROR, latency>3000, message:\"JWT token\", trace:<id>, or app:<api-name>.")
     return jsonify({"answer": " ".join(answer), "next_steps": result.get("suggestions", [])[:3]})
+
+# ── Custom environments ──────────────────────────────────────────────────────
+@app.route("/settings/environments", methods=["GET", "POST", "DELETE"])
+@login_required
+def settings_environments():
+    user = get_current_user()
+    if user is None:
+        return jsonify({"error": "Session expired. Please login again."}), 401
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        name = re.sub(r"[^A-Za-z0-9_-]", "", (data.get("name") or "").upper())[:40]
+        if not name:
+            return jsonify({"error": "Environment name is required"}), 400
+        existing = CustomEnvironment.query.filter_by(user_id=user.id, name=name).first()
+        if not existing and name not in DEFAULT_ENVIRONMENTS:
+            db.session.add(CustomEnvironment(user_id=user.id, name=name))
+            db.session.commit()
+        return jsonify({"environments": get_user_environments(user)})
+    if request.method == "DELETE":
+        name = re.sub(r"[^A-Za-z0-9_-]", "", (request.args.get("name") or "").upper())[:40]
+        env = CustomEnvironment.query.filter_by(user_id=user.id, name=name).first()
+        if env:
+            db.session.delete(env)
+            db.session.commit()
+        return jsonify({"environments": get_user_environments(user)})
+    return jsonify({"environments": get_user_environments(user), "defaults": DEFAULT_ENVIRONMENTS})
 
 # ── Profile / API key ─────────────────────────────────────────────────────────
 @app.route("/profile/apikey", methods=["POST"])
