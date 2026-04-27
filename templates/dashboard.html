@@ -14,35 +14,35 @@
     </div>
 
     <div class="nav-section">Analyse</div>
-    <a class="nav-link active" onclick="showSection('overview')">
+    <a class="nav-link active" onclick="showSection('overview', event)">
       <span class="nav-icon">📊</span> Overview
     </a>
-    <a class="nav-link" onclick="showSection('upload')">
+    <a class="nav-link" onclick="showSection('overview', event)">
       <span class="nav-icon">⬆</span> Upload Logs
     </a>
-    <a class="nav-link" onclick="showSection('api-ingest')">
+    <a class="nav-link" onclick="showSection('api-ingest', event)">
       <span class="nav-icon">⚡</span> API Ingestion
     </a>
-    <a class="nav-link" onclick="showSection('s3')">
+    <a class="nav-link" onclick="showSection('s3', event)">
       <span class="nav-icon">☁</span> S3 Connectors
     </a>
 
     <div class="nav-section" style="margin-top:12px">Explore</div>
-    <a class="nav-link" onclick="showSection('trace')">
+    <a class="nav-link" onclick="showSection('trace', event)">
       <span class="nav-icon">🔍</span> Trace Explorer
     </a>
-    <a class="nav-link" onclick="showSection('flow')">
+    <a class="nav-link" onclick="showSection('flow', event)">
       <span class="nav-icon">🔀</span> Flow Analytics
     </a>
-    <a class="nav-link" onclick="showSection('history')">
+    <a class="nav-link" onclick="showSection('history', event)">
       <span class="nav-icon">📋</span> Session History
     </a>
 
     <div class="nav-section" style="margin-top:12px">Config</div>
-    <a class="nav-link" onclick="showSection('alerts')">
+    <a class="nav-link" onclick="showSection('alerts', event)">
       <span class="nav-icon">🔔</span> Alert Rules
     </a>
-    <a class="nav-link" onclick="showSection('settings')">
+    <a class="nav-link" onclick="showSection('settings', event)">
       <span class="nav-icon">⚙</span> Settings & API Key
     </a>
 
@@ -429,12 +429,41 @@ console.log(await res.json());</pre>
 let _lastResult = null;
 let _rawLogs    = '';
 
+async function safeJson(res){
+  const contentType = res.headers.get('content-type') || '';
+  if(!contentType.includes('application/json')){
+    const text = await res.text();
+    throw new Error(`Server returned ${res.status}. Expected JSON but got HTML/text. ${text.slice(0,120)}`);
+  }
+  const data = await res.json();
+  if(!res.ok){
+    throw new Error(data.error || `Request failed with status ${res.status}`);
+  }
+  return data;
+}
+
+function showError(message){
+  const status = document.getElementById('upload-status');
+  if(status) status.textContent = '❌ ' + message;
+  alert(message);
+}
+
 // ── Section routing ───────────────────────────────────────────────────────────
-function showSection(name){
+function showSection(name, ev){
+  const target = document.getElementById('sec-' + name);
+  if(!target){
+    console.warn('Missing section:', 'sec-' + name);
+    return showSection('overview', ev);
+  }
   document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');
   document.querySelectorAll('.nav-link').forEach(a=>a.classList.remove('active'));
-  document.getElementById('sec-'+name).style.display='block';
-  event.currentTarget.classList.add('active');
+  target.style.display='block';
+  if(ev && ev.currentTarget){
+    ev.currentTarget.classList.add('active');
+  } else {
+    const nav = [...document.querySelectorAll('.nav-link')].find(a => (a.getAttribute('onclick') || '').includes(`'${name}'`));
+    if(nav) nav.classList.add('active');
+  }
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -464,13 +493,16 @@ async function uploadFiles(files){
   fd.append('env', document.getElementById('env').value);
   fd.append('query', document.getElementById('search').value);
   document.getElementById('upload-status').textContent = `Uploading ${files.length} file(s)…`;
-  const res = await fetch('/analyse', {method:'POST', body:fd});
-  const data = await res.json();
-  if(data.error){alert(data.error);return;}
-  _rawLogs = data.preview;
-  _lastResult = data;
-  renderResult(data);
-  document.getElementById('upload-status').textContent = `✅ Analysed ${files.map(f=>f.name).join(', ')}`;
+  try{
+    const res = await fetch('/analyse', {method:'POST', body:fd});
+    const data = await safeJson(res);
+    _rawLogs = data.preview;
+    _lastResult = data;
+    renderResult(data);
+    document.getElementById('upload-status').textContent = `✅ Analysed ${files.map(f=>f.name).join(', ')}`;
+  }catch(err){
+    showError(err.message);
+  }
 }
 
 async function analysePaste(){
@@ -480,11 +512,14 @@ async function analysePaste(){
   fd.append('raw_paste', raw);
   fd.append('env', document.getElementById('env').value);
   fd.append('query', document.getElementById('search').value);
-  const res = await fetch('/analyse', {method:'POST', body:fd});
-  const data = await res.json();
-  if(data.error){alert(data.error);return;}
-  _lastResult = data;
-  renderResult(data);
+  try{
+    const res = await fetch('/analyse', {method:'POST', body:fd});
+    const data = await safeJson(res);
+    _lastResult = data;
+    renderResult(data);
+  }catch(err){
+    showError(err.message);
+  }
 }
 
 function reanalyse(){
@@ -493,7 +528,7 @@ function reanalyse(){
   fd.append('raw_paste', document.getElementById('raw-preview').textContent);
   fd.append('env', document.getElementById('env').value);
   fd.append('query', document.getElementById('search').value);
-  fetch('/analyse',{method:'POST',body:fd}).then(r=>r.json()).then(renderResult);
+  fetch('/analyse',{method:'POST',body:fd}).then(safeJson).then(d=>{_lastResult=d;renderResult(d);}).catch(err=>showError(err.message));
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -576,7 +611,7 @@ async function createAlert(){
   const thr  = parseFloat(document.getElementById('alert-threshold').value);
   if(!name||isNaN(thr)){alert('Fill in all fields.');return;}
   const res  = await fetch('/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,condition:cond,threshold:thr})});
-  const data = await res.json();
+  const data = await safeJson(res);
   const list = document.getElementById('alerts-list');
   // remove "no rules" placeholder
   if(list.querySelector('div[style]')) list.innerHTML='';

@@ -34,7 +34,7 @@ EXPOSE 5000
 
 CMD gunicorn app:app \
         --bind 0.0.0.0:$PORT \
-        --workers 2 \
+        --workers ${WEB_CONCURRENCY:-1} \
         --timeout 120 \
         --access-logfile - \
         --error-logfile -

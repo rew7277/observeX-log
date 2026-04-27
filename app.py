@@ -1,4 +1,4 @@
-import os, re, json, hashlib, secrets, datetime
+import os, re, json, hashlib, secrets, datetime, threading
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, jsonify, flash
@@ -17,7 +17,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "sqlite:///observex.db"
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024  # default 100 MB
 
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -64,8 +64,20 @@ class AlertRule(db.Model):
     active     = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+_db_init_lock = threading.Lock()
+
+def init_db_once():
+    with _db_init_lock:
+        db.create_all(checkfirst=True)
+
 with app.app_context():
-    db.create_all()
+    init_db_once()
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    if request.path.startswith("/analyse") or request.path.startswith("/api/"):
+        return jsonify({"error": f"Uploaded log is too large. Current limit is {app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)} MB. Increase MAX_UPLOAD_MB in Railway or upload smaller files."}), 413
+    return "Uploaded file too large", 413
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def login_required(f):
@@ -228,41 +240,42 @@ def dashboard():
 @app.route("/analyse", methods=["POST"])
 @login_required
 def analyse():
-    env   = request.form.get("env", "PROD")
-    query = request.form.get("query", "")
-    raw   = ""
-    fname = "paste"
-
-    if "logfile" in request.files:
-        files = request.files.getlist("logfile")
-        for f in files:
-            if f and allowed_file(f.filename):
-                fname = secure_filename(f.filename)
-                raw  += f"\n--- FILE: {fname} ---\n" + f.read().decode("utf-8", errors="replace")
-
-    if not raw and request.form.get("raw_paste"):
-        raw   = request.form["raw_paste"]
+    try:
+        env = request.form.get("env", "PROD")
+        query = request.form.get("query", "")
+        raw_parts = []
         fname = "paste"
 
-    if not raw:
-        return jsonify({"error": "No log content provided"}), 400
+        if "logfile" in request.files:
+            files = request.files.getlist("logfile")
+            for f in files:
+                if not f or not f.filename:
+                    continue
+                if not allowed_file(f.filename):
+                    return jsonify({"error": f"Unsupported file type: {f.filename}. Upload .log, .txt or .json only."}), 400
+                fname = secure_filename(f.filename)
+                raw_parts.append(f"\n--- FILE: {fname} ---\n" + f.read().decode("utf-8", errors="replace"))
 
-    result = analyse_log_text(raw, query, env)
+        raw = "".join(raw_parts)
+        if not raw and request.form.get("raw_paste"):
+            raw = request.form["raw_paste"]
+            fname = "paste"
 
-    ls = LogSession(
-        user_id    = session["user_id"],
-        environment= env,
-        filename   = fname,
-        total_lines= result["total"],
-        error_count= result["errors"],
-        warn_count = result["warns"],
-        avg_latency= result["latency"],
-        apps_found = ",".join(result["apps"]),
-    )
-    db.session.add(ls)
-    db.session.commit()
+        if not raw:
+            return jsonify({"error": "No log content provided"}), 400
 
-    return jsonify(result)
+        result = analyse_log_text(raw, query, env)
+        ls = LogSession(user_id=session["user_id"], environment=env, filename=fname,
+                        total_lines=result["total"], error_count=result["errors"],
+                        warn_count=result["warns"], avg_latency=result["latency"],
+                        apps_found=",".join(result["apps"]))
+        db.session.add(ls)
+        db.session.commit()
+        return jsonify(result)
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("Log analysis failed")
+        return jsonify({"error": f"Log analysis failed: {str(exc)}"}), 500
 
 # ── API ingestion (Bearer auth) ───────────────────────────────────────────────
 @app.route("/api/v1/logs/ingest", methods=["POST"])
