@@ -79,11 +79,41 @@ def request_entity_too_large(error):
         return jsonify({"error": f"Uploaded log is too large. Current limit is {app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)} MB. Increase MAX_UPLOAD_MB in Railway or upload smaller files."}), 413
     return "Uploaded file too large", 413
 
+@app.route("/health")
+def health():
+    try:
+        db.session.execute(db.text("SELECT 1"))
+        return jsonify({"status": "ok"}), 200
+    except Exception as exc:
+        app.logger.exception("Health check failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    if request.path.startswith("/analyse") or request.path.startswith("/api/") or request.path in {"/alerts", "/history", "/profile/apikey", "/health"}:
+        return jsonify({"error": "Internal server error. Please check Railway logs."}), 500
+    return "Internal server error", 500
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def get_current_user():
+    """Return the logged-in user or clear a stale/invalid session."""
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    user = db.session.get(User, uid)
+    if user is None:
+        session.clear()
+    return user
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if "user_id" not in session:
+        user = get_current_user()
+        if user is None:
+            if request.path.startswith("/api/") or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return jsonify({"error": "Session expired. Please login again."}), 401
+            flash("Session expired. Please login again.", "info")
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
@@ -151,7 +181,7 @@ def send_reset_email(user):
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    if "user_id" in session:
+    if get_current_user() is not None:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
@@ -230,9 +260,8 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    user   = User.query.get(session["user_id"])
-    recent = LogSession.query.filter_by(user_id=user.id)\
-                             .order_by(LogSession.created_at.desc()).limit(10).all()
+    user = get_current_user()
+    recent = LogSession.query.filter_by(user_id=user.id)                             .order_by(LogSession.created_at.desc()).limit(10).all()
     alerts = AlertRule.query.filter_by(user_id=user.id).all()
     return render_template("dashboard.html", user=user, recent=recent, alerts=alerts)
 
@@ -265,7 +294,10 @@ def analyse():
             return jsonify({"error": "No log content provided"}), 400
 
         result = analyse_log_text(raw, query, env)
-        ls = LogSession(user_id=session["user_id"], environment=env, filename=fname,
+        user = get_current_user()
+        if user is None:
+            return jsonify({"error": "Session expired. Please login again."}), 401
+        ls = LogSession(user_id=user.id, environment=env, filename=fname,
                         total_lines=result["total"], error_count=result["errors"],
                         warn_count=result["warns"], avg_latency=result["latency"],
                         apps_found=",".join(result["apps"]))
@@ -315,7 +347,10 @@ def api_ingest():
 @app.route("/alerts", methods=["GET", "POST", "DELETE"])
 @login_required
 def alerts():
-    uid = session["user_id"]
+    user = get_current_user()
+    if user is None:
+        return jsonify({"error": "Session expired. Please login again."}), 401
+    uid = user.id
     if request.method == "POST":
         data = request.get_json(force=True)
         rule = AlertRule(user_id=uid, name=data["name"],
@@ -338,7 +373,10 @@ def alerts():
 @app.route("/history")
 @login_required
 def history():
-    uid      = session["user_id"]
+    user = get_current_user()
+    if user is None:
+        return jsonify({"error": "Session expired. Please login again."}), 401
+    uid = user.id
     sessions = LogSession.query.filter_by(user_id=uid)\
                                .order_by(LogSession.created_at.desc()).limit(50).all()
     return jsonify([{
@@ -352,7 +390,9 @@ def history():
 @app.route("/profile/apikey", methods=["POST"])
 @login_required
 def rotate_api_key():
-    user = User.query.get(session["user_id"])
+    user = get_current_user()
+    if user is None:
+        return jsonify({"error": "Session expired. Please login again."}), 401
     user.api_key = secrets.token_hex(32)
     db.session.commit()
     return jsonify({"api_key": user.api_key})
