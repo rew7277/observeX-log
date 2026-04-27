@@ -1,7 +1,7 @@
 import os, re, json, hashlib, secrets, datetime, threading
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash
+    session, jsonify, flash, make_response
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
@@ -121,46 +121,129 @@ def login_required(f):
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
 
+
+def percentile(values, pct):
+    if not values:
+        return 0
+    values = sorted(values)
+    k = (len(values)-1) * (pct/100)
+    f = int(k)
+    c = min(f+1, len(values)-1)
+    if f == c:
+        return values[f]
+    return round(values[f] + (values[c]-values[f]) * (k-f))
+
+def detect_level(line: str):
+    if re.search(r"error|exception|failed|fatal|timeout|500|HTTP 5", line, re.I):
+        return "ERROR"
+    if re.search(r"warn|slow|retry|429|HTTP 4", line, re.I):
+        return "WARN"
+    return "INFO"
+
+def extract_first(patterns, text, default=""):
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m.group(1)
+    return default
+
+def parse_search_query(query: str):
+    filters = {}
+    if not query:
+        return filters
+    q = query.strip()
+    for k, v in re.findall(r'(\w+):"([^"]+)"', q):
+        filters[k.lower()] = v
+        q = q.replace(f'{k}:"{v}"', "")
+    for k, op, v in re.findall(r'(latency|duration|timeTaken)\s*([><=])\s*(\d+)', q, re.I):
+        filters['latency_op'] = op
+        filters['latency_value'] = int(v)
+    for k, v in re.findall(r'(env|environment|app|application|level|trace|traceid|event|eventid|flow|status|message):([^\s]+)', q, re.I):
+        filters[k.lower()] = v
+    remaining = re.sub(r'\w+:"[^"]+"|\w+:[^\s]+|(latency|duration|timeTaken)\s*[><=]\s*\d+', "", query, flags=re.I).strip()
+    if remaining:
+        filters['free'] = remaining
+    return filters
+
+def line_matches_filters(line, filters, env):
+    if not filters:
+        return True
+    low = line.lower()
+    if filters.get('env') and filters['env'].lower() != env.lower() and filters['env'].lower() not in low:
+        return False
+    if filters.get('environment') and filters['environment'].lower() != env.lower() and filters['environment'].lower() not in low:
+        return False
+    for key in ('app','application','level','trace','traceid','event','eventid','flow','status','message','free'):
+        if key in filters and filters[key].lower() not in low:
+            return False
+    if 'latency_value' in filters:
+        lat = extract_first([r"(?:latency|duration|timeTaken)[=: ]+(\d+)"], line, None)
+        if lat is None:
+            return False
+        lat = int(lat); val = filters['latency_value']; op = filters.get('latency_op', '>')
+        if op == '>' and not lat > val: return False
+        if op == '<' and not lat < val: return False
+        if op == '=' and not lat == val: return False
+    return True
+
 def analyse_log_text(raw: str, query: str = "", env: str = "PROD"):
-    lines = [l for l in raw.splitlines() if l.strip()]
-    if query:
-        lines = [l for l in lines if query.lower() in l.lower()]
+    all_lines = [l for l in raw.splitlines() if l.strip()]
+    filters = parse_search_query(query)
+    lines = [l for l in all_lines if line_matches_filters(l, filters, env)]
+    joined = "\n".join(lines)
 
-    errors  = [l for l in lines if re.search(r"error|exception|failed|timeout|500", l, re.I)]
-    warns   = [l for l in lines if re.search(r"warn|slow|retry|429", l, re.I)]
-    lats    = [int(m.group(1)) for m in re.finditer(r"(?:latency|duration|timeTaken)[=: ]+(\d+)", raw, re.I)]
-    apps    = list(dict.fromkeys(
-        m.group(1) for m in re.finditer(r"(?:app|application|service)[=: ]([a-zA-Z0-9_\-]+)", raw, re.I)
-    ))
-    traces  = list(dict.fromkeys(
-        m.group(1) for m in re.finditer(r"traceId[=: ]([a-zA-Z0-9\-]+)", raw, re.I)
-    ))
-    events  = list(dict.fromkeys(
-        m.group(1) for m in re.finditer(r"eventId[=: ]([a-zA-Z0-9\-]+)", raw, re.I)
-    ))
-    avg_lat = round(sum(lats) / len(lats)) if lats else 0
+    errors = [l for l in lines if detect_level(l) == "ERROR"]
+    warns = [l for l in lines if detect_level(l) == "WARN"]
+    lats = [int(m.group(1)) for m in re.finditer(r"(?:latency|duration|timeTaken)[=: ]+(\d+)", joined, re.I)]
+    statuses = [m.group(1) for m in re.finditer(r"(?:status|statusCode|httpStatus)[=: ]+(\d{3})", joined, re.I)]
+    apps = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:app|application|service)[=: ]([a-zA-Z0-9_\-.]+)", joined, re.I)))
+    traces = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:traceId|trace|correlationId|correlation-id)[=: ]([a-zA-Z0-9\-]+)", joined, re.I)))
+    events = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:eventId|event|event-id)[=: ]([a-zA-Z0-9\-]+)", joined, re.I)))
+    avg_lat = round(sum(lats)/len(lats)) if lats else 0
+    p95 = percentile(lats, 95); p99 = percentile(lats, 99)
+    error_rate = round(len(errors)/len(lines)*100, 2) if lines else 0
+    warn_rate = round(len(warns)/len(lines)*100, 2) if lines else 0
+    app_counts = {a: sum(1 for l in lines if a.lower() in l.lower()) for a in apps[:20]}
+    top_errors = {}
+    for line in errors:
+        key = extract_first([r"(?:Exception|ERROR|Error)[:\s]+([A-Za-z0-9_.:-]+)", r"(timeout|jwt|token|connection|bad request|gateway|failed)"], line, "General error")
+        top_errors[key] = top_errors.get(key, 0) + 1
+    top_errors = sorted(top_errors.items(), key=lambda x: x[1], reverse=True)[:10]
+    slow_lines = [l for l in lines if re.search(r"(?:latency|duration|timeTaken)[=: ]+([3-9]\d{3}|\d{5,})", l, re.I)]
 
-    findings = []
-    findings.append({"label": f"{env}: {len(errors)} error line(s) detected", "type": "error"})
-    findings.append({"label": f"{len(warns)} warning/retry/slow line(s)", "type": "warn"})
-    findings.append({"label": f"{len(apps)} application(s): {', '.join(apps[:6]) or 'none detected'}", "type": "ok"})
-    if traces:
-        findings.append({"label": f"Trace IDs: {', '.join(traces[:4])}", "type": "info"})
-    if events:
-        findings.append({"label": f"Event IDs: {', '.join(events[:4])}", "type": "info"})
+    timeline = []
+    for i, line in enumerate(lines[:300]):
+        timeline.append({
+            "time": extract_first([r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"], line, f"line {i+1}"),
+            "level": detect_level(line),
+            "app": extract_first([r"(?:app|application|service)[=: ]([a-zA-Z0-9_\-.]+)"], line, "unknown"),
+            "trace": extract_first([r"(?:traceId|trace|correlationId|correlation-id)[=: ]([a-zA-Z0-9\-]+)"], line, ""),
+            "event": extract_first([r"(?:eventId|event|event-id)[=: ]([a-zA-Z0-9\-]+)"], line, ""),
+            "latency": int(extract_first([r"(?:latency|duration|timeTaken)[=: ]+(\d+)"], line, "0")),
+            "message": line[:500]
+        })
+
+    findings = [
+        {"label": f"{env}: {len(errors)} error line(s) detected", "type": "error" if errors else "ok"},
+        {"label": f"{len(warns)} warning/retry/slow line(s)", "type": "warn" if warns else "ok"},
+        {"label": f"Error rate {error_rate}% · Warning rate {warn_rate}%", "type": "info"},
+        {"label": f"P95 {p95}ms · P99 {p99}ms · Avg {avg_lat}ms", "type": "info"},
+        {"label": f"{len(apps)} application(s): {', '.join(apps[:6]) or 'none detected'}", "type": "ok"},
+    ]
+    suggestions = []
+    if errors: suggestions.append("Prioritise top error clusters and open Trace Explorer for the first failing trace/event.")
+    if p95 > 2000: suggestions.append("P95 latency is high. Review downstream calls, timeout settings and retries.")
+    if any('jwt' in l.lower() or 'token' in l.lower() for l in errors[:100]): suggestions.append("JWT/token failures detected. Validate auth policy, token expiry and gateway headers.")
+    if not suggestions: suggestions.append("No major hotspot detected. Try broader search or upload more logs.")
 
     return {
-        "total":    len(lines),
-        "errors":   len(errors),
-        "warns":    len(warns),
-        "latency":  avg_lat,
-        "apps":     apps,
-        "traces":   traces,
-        "events":   events,
-        "findings": findings,
-        "preview":  "\n".join(lines[:150]),
-        "flow":     " → ".join(apps) if apps else "",
-        "error_lines": errors[:30],
+        "total": len(lines), "original_total": len(all_lines), "errors": len(errors), "warns": len(warns),
+        "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
+        "apps": apps, "app_counts": app_counts, "traces": traces, "events": events, "statuses": statuses[:50],
+        "top_errors": top_errors, "findings": findings, "suggestions": suggestions,
+        "preview": "\n".join(lines[:500]), "flow": " → ".join(apps) if apps else "",
+        "error_lines": errors[:50], "slow_lines": slow_lines[:50], "timeline": timeline,
+        "query_help": "Use app:s-htmltopdf-api env:PROD level:ERROR trace:abc event:xyz latency>3000 message:\"JWT token\""
     }
 
 def send_reset_email(user):
@@ -385,6 +468,41 @@ def history():
         "warns": s.warn_count, "latency": s.avg_latency,
         "apps": s.apps_found, "at": s.created_at.strftime("%Y-%m-%d %H:%M")
     } for s in sessions])
+
+@app.route("/export/csv", methods=["POST"])
+@login_required
+def export_csv():
+    data = request.get_json(force=True, silent=True) or {}
+    rows = data.get("rows", [])
+    output = "time,level,app,trace,event,latency,message\n"
+    def clean(v):
+        return '"' + str(v).replace('"','""').replace('\n',' ') + '"'
+    for r in rows:
+        output += ",".join(clean(r.get(k, "")) for k in ["time","level","app","trace","event","latency","message"]) + "\n"
+    resp = make_response(output)
+    resp.headers["Content-Type"] = "text/csv"
+    resp.headers["Content-Disposition"] = "attachment; filename=observex-log-export.csv"
+    return resp
+
+@app.route("/assistant/suggest", methods=["POST"])
+@login_required
+def assistant_suggest():
+    data = request.get_json(force=True, silent=True) or {}
+    q = (data.get("question") or "").lower()
+    result = data.get("result") or {}
+    answer = []
+    if "why" in q or "error" in q:
+        top = result.get("top_errors") or []
+        if top:
+            answer.append("Top suspected error clusters: " + ", ".join([f"{k} ({v})" for k, v in top[:5]]))
+        answer.append(f"Current filter has {result.get('errors', 0)} errors and {result.get('warns', 0)} warnings.")
+    if "slow" in q or "latency" in q:
+        answer.append(f"Latency summary: avg {result.get('latency',0)}ms, P95 {result.get('p95',0)}ms, P99 {result.get('p99',0)}ms.")
+    if "prod" in q or "uat" in q or "compare" in q:
+        answer.append("Use the Environment dropdown and the same search query to compare PROD/UAT/DEV sessions.")
+    if not answer:
+        answer.append("Try searches like level:ERROR, latency>3000, message:\"JWT token\", trace:<id>, or app:<api-name>.")
+    return jsonify({"answer": " ".join(answer), "next_steps": result.get("suggestions", [])[:3]})
 
 # ── Profile / API key ─────────────────────────────────────────────────────────
 @app.route("/profile/apikey", methods=["POST"])
