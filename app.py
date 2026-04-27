@@ -9,6 +9,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
 
+try:
+    from authlib.integrations.flask_client import OAuth
+except Exception:
+    OAuth = None
+
 app = Flask(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -29,6 +34,18 @@ app.config["MAIL_DEFAULT_SENDER"] = os.environ.get("MAIL_USERNAME", "noreply@obs
 
 db   = SQLAlchemy(app)
 mail = Mail(app)
+
+# Optional Google OAuth. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI in Railway.
+oauth = OAuth(app) if OAuth else None
+google = None
+if oauth and os.environ.get("GOOGLE_CLIENT_ID") and os.environ.get("GOOGLE_CLIENT_SECRET"):
+    google = oauth.register(
+        name="google",
+        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
 
 ALLOWED_EXT = {"log", "txt", "json"}
 
@@ -864,6 +881,41 @@ def login():
         flash("Invalid email or password.", "error")
     return render_template("login.html")
 
+@app.route("/login/google")
+def google_login():
+    if google is None:
+        flash("Google login is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Railway variables.", "info")
+        return redirect(url_for("login"))
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or url_for("google_callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+@app.route("/auth/google/callback")
+def google_callback():
+    if google is None:
+        flash("Google login is not configured.", "error")
+        return redirect(url_for("login"))
+    token = google.authorize_access_token()
+    info = token.get("userinfo") or google.parse_id_token(token)
+    email = (info.get("email") or "").strip().lower()
+    name = info.get("name") or email.split("@")[0]
+    if not email:
+        flash("Google did not return an email address.", "error")
+        return redirect(url_for("login"))
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        user = User(name=name, email=email, password_hash=generate_password_hash(secrets.token_urlsafe(32)))
+        db.session.add(user); db.session.flush()
+        ws = Workspace(owner_id=user.id, name=f"{name}'s Workspace")
+        db.session.add(ws); db.session.flush()
+        db.session.add(WorkspaceMember(workspace_id=ws.id, user_id=user.id, role="Admin"))
+        audit_event(user, "auth.google_signup", email, {})
+        db.session.commit()
+    session["user_id"] = user.id
+    session["user_name"] = user.name
+    audit_event(user, "auth.google_login", email, {})
+    db.session.commit()
+    return redirect(url_for("dashboard"))
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
@@ -1047,21 +1099,56 @@ def analyse():
 def api_ingest():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        return jsonify({"error": "Missing token"}), 401
+        return jsonify({"error": "Missing token. Use Authorization: Bearer <OBSERVEX_API_KEY>"}), 401
     key  = auth.split(" ", 1)[1]
     user = User.query.filter_by(api_key=key).first()
     if not user:
         return jsonify({"error": "Invalid API key"}), 401
 
     data  = request.get_json(force=True, silent=True) or {}
-    env   = data.get("environment", "PROD")
-    raw   = data.get("logs", "")
-    app_n = data.get("application", "api-source")
+    env   = (data.get("environment") or "PROD").upper()
+    app_n = data.get("application") or data.get("app") or "api-source"
+    source = data.get("source", "api")
+
+    raw = data.get("logs", "")
+    # Supports both raw string logs and structured event objects.
+    # Accepted structured payload:
+    # { environment, eventId, application, timestamp, payload }
+    # or { environment, application, logs:[{timestamp, level, eventId, message, payload}] }
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        rows = [raw]
+    elif raw:
+        rows = None
+    elif any(k in data for k in ("eventId", "event_id", "timestamp", "payload", "message")):
+        rows = [data]
+    else:
+        rows = None
+
+    if rows is not None:
+        lines=[]
+        for item in rows:
+            if not isinstance(item, dict):
+                lines.append(str(item)); continue
+            ts = item.get("timestamp") or item.get("time") or datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            level = (item.get("level") or detect_level(str(item.get("message") or item.get("payload") or ""))).upper()
+            eid = item.get("eventId") or item.get("event_id") or item.get("traceId") or item.get("correlationId") or ""
+            msg = item.get("message") or item.get("msg") or "structured log"
+            payload = item.get("payload", "")
+            if isinstance(payload, (dict, list)):
+                payload_txt = json.dumps(payload, ensure_ascii=False, default=str)
+            else:
+                payload_txt = str(payload or "")
+            lines.append(f"{level} {str(ts).replace('T',' ').replace('Z','')} [[APIIngestion]: [{app_n}].{source}] [processor: api-ingestion; event: {eid}] org.observex.ingest.Logger: {msg} {payload_txt}")
+        raw = "\n".join(lines)
 
     if not raw:
-        return jsonify({"error": "logs field required"}), 400
+        return jsonify({"error": "logs field or structured event payload required"}), 400
 
-    result = analyse_log_text(raw, "", env, app_n)
+    started = time.time()
+    result = analyse_log_text(str(raw), "", env, app_n)
+    duration_ms = int((time.time() - started) * 1000)
     ls = LogSession(
         user_id    = user.id,
         environment= env,
@@ -1073,14 +1160,37 @@ def api_ingest():
         apps_found = ",".join(result["apps"]),
     )
     db.session.add(ls)
-    db.session.commit()
+    db.session.flush()
     try:
-        persist_raw_upload(user.id, ls.id, app_n, raw)
+        persist_raw_upload(user.id, ls.id, app_n, str(raw))
     except Exception:
         app.logger.exception("Could not persist API ingestion to volume")
-    audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors")})
+    db.session.add(QueryMetric(user_id=user.id, action="api_ingest", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(str(raw).encode("utf-8"))))
+    audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "source": source, "total": result.get("total"), "errors": result.get("errors")})
     db.session.commit()
-    return jsonify({"status": "ok", "session_id": ls.id, "stored": True, **result})
+    return jsonify({
+        "status": "success",
+        "message": "Logs ingested and indexed",
+        "session_id": ls.id,
+        "environment": env,
+        "application": app_n,
+        "source": source,
+        "ingested": result.get("total", 0),
+        "processingTimeMs": duration_ms,
+        "stored": True,
+        "schema": result.get("schema", schema_detection_sample(str(raw))),
+        "result": result
+    })
+
+@app.route("/api/v1/logs/ingest", methods=["GET"])
+def api_ingest_docs_short():
+    return jsonify({
+        "endpoint": "POST /api/v1/logs/ingest",
+        "auth": "Authorization: Bearer <OBSERVEX_API_KEY>",
+        "raw_example": {"environment":"PROD","application":"s-paymentengine-api","logs":"INFO 2026-04-25 14:51:17 ..."},
+        "structured_example": {"environment":"PROD","eventId":"45673527-38365673-3987637","application":"s-paymentengine-api","timestamp":"2026-04-25 14:51:17","payload":{"message":"payment success"}},
+        "batch_example": {"environment":"PROD","application":"s-paymentengine-api","logs":[{"timestamp":"2026-04-25T14:51:17Z","level":"INFO","eventId":"45673527-38365673-3987637","message":"before request","payload":{}}]}
+    })
 
 # ── Alert rules ───────────────────────────────────────────────────────────────
 @app.route("/alerts", methods=["GET", "POST", "DELETE"])
@@ -1382,9 +1492,11 @@ def api_docs():
         "endpoints": {
             "ingest": {
                 "method": "POST", "path": "/api/v1/logs/ingest",
-                "request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":"INFO 2026-04-25 14:51:17 ..."},
-                "success_response": {"status":"ok", "session_id":123, "stored": True, "errors":0, "warns":0},
-                "failure_responses": {"401":"Missing/invalid API key", "400":"logs field required", "413":"payload exceeds MAX_UPLOAD_MB"}
+                "raw_request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":"INFO 2026-04-25 14:51:17 ..."},
+                "structured_request": {"environment":"PROD", "eventId":"45673527-38365673-3987637", "application":"s-paymentengine-api", "timestamp":"2026-04-25 14:51:17", "payload": {"status":"Success", "amount": 1200}},
+                "batch_request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":[{"timestamp":"2026-04-25T14:51:17Z", "level":"INFO", "eventId":"45673527-38365673-3987637", "message":"payment success", "payload":{}}]},
+                "success_response": {"status":"success", "session_id":123, "stored": True, "ingested": 1, "processingTimeMs": 42},
+                "failure_responses": {"401":"Missing/invalid API key", "400":"logs field or structured event payload required", "413":"payload exceeds MAX_UPLOAD_MB"}
             },
             "search": {"method":"GET", "path":"/api/v1/logs/search?q=level:ERROR&limit=200", "purpose":"Search recently persisted masked logs"},
             "trace": {"method":"GET", "path":"/api/v1/trace/<trace_id>", "purpose":"Return grouped trace/event timeline from persisted masked logs"},

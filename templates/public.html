@@ -1,25 +1,33 @@
 {% extends "base.html" %}
-{% block title %}ObserveX · Log Intelligence SaaS{% endblock %}
+{% block title %}ObserveX · AI Log Intelligence Platform{% endblock %}
 {% block body %}
-<div style="min-height:100vh;background:radial-gradient(circle at top left,rgba(90,94,247,.18),transparent 35%),var(--bg);">
-  <header style="display:flex;justify-content:space-between;align-items:center;padding:22px 6vw;border-bottom:1px solid var(--bd);position:sticky;top:0;background:rgba(10,10,18,.82);backdrop-filter:blur(14px);z-index:10">
-    <a href="{{ url_for('index') }}" style="display:flex;align-items:center;gap:12px;color:var(--tx);text-decoration:none"><div class="brand-logo" style="font-weight:900">OX</div><div><b>ObserveX</b><div style="font-size:11px;color:var(--tx3)">Incident intelligence for logs</div></div></a>
-    <nav style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-weight:700;font-size:13px">
-      <a href="{{ url_for('public_features') }}">Features</a><a href="{{ url_for('public_product') }}">Product</a><a href="{{ url_for('public_security') }}">Security</a><a href="{{ url_for('public_pricing') }}">Pricing</a><a class="btn btn-ghost btn-sm" href="{{ url_for('login') }}">Login</a><a class="btn btn-primary btn-sm" href="{{ url_for('register') }}">Start free</a>
-    </nav>
-  </header>
-  <main style="padding:72px 6vw">
-    <section style="max-width:1050px;margin:auto;text-align:center">
-      <div class="badge badge-info">Upload or stream logs → RCA, trace, impact and safe sharing</div>
-      <h1 style="font-size:clamp(38px,7vw,82px);line-height:.95;letter-spacing:-.06em;margin:20px 0;background:var(--grad);-webkit-background-clip:text;color:transparent">Find production issues before customers do.</h1>
-      <p style="font-size:18px;color:var(--tx2);max-width:760px;margin:0 auto 28px">ObserveX converts MuleSoft, JSON, Java, Node, Nginx and cloud logs into incident timelines, dynamic system maps, severity scoring, PII masking and explainable RCA reports.</p>
-      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><a class="btn btn-primary" href="{{ url_for('register') }}">Create workspace</a><a class="btn btn-ghost" href="{{ url_for('login') }}">Open app</a></div>
-    </section>
-    <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:64px auto 0;max-width:1180px">
-      {% for title,desc,icon in [
-        ('Demo incidents','Show value instantly without customer logs.','🧪'),('Onboarding wizard','Upload, S3, API ingestion setup paths.','🧭'),('Queue ingestion','Async jobs for 500MB+ uploads.','⚙️'),('Dynamic system map','APIs, dependencies, errors and latency from real logs.','🔀'),('PII masking','JWT, Aadhaar, PAN, mobile, loan/payment IDs masked.','🛡'),('Explainable RCA','Every recommendation shows supporting logs/traces.','🧠'),('Source health','File/API/S3 ingestion status in one place.','📡'),('Safe sharing','Masked RCA reports with expiring links.','🔗')]
-      %}<div class="card"><div style="font-size:28px">{{icon}}</div><h3>{{title}}</h3><p style="color:var(--tx2);font-size:13px">{{desc}}</p></div>{% endfor %}
-    </section>
-  </main>
+<style>
+.public-shell{min-height:100vh;background:radial-gradient(circle at 20% 10%,rgba(124,58,237,.35),transparent 30%),radial-gradient(circle at 85% 20%,rgba(236,72,153,.24),transparent 28%),#070711;overflow:hidden}.public-nav{display:flex;justify-content:space-between;align-items:center;padding:22px 6vw;border-bottom:1px solid var(--bd);background:rgba(7,7,17,.78);backdrop-filter:blur(16px);position:sticky;top:0;z-index:10}.pub-logo{display:flex;gap:12px;align-items:center;color:#fff}.pub-mark{width:42px;height:42px;border-radius:14px;background:var(--grad);display:grid;place-items:center;font-weight:900;box-shadow:0 12px 42px rgba(124,58,237,.42)}.hero-public{display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;max-width:1240px;margin:0 auto;padding:84px 6vw}.hero-title{font-size:clamp(42px,7vw,86px);line-height:.92;letter-spacing:-.07em}.hero-title span{background:var(--grad);-webkit-background-clip:text;color:transparent}.hero-card{background:rgba(28,28,48,.74);border:1px solid var(--bd2);border-radius:28px;padding:22px;box-shadow:var(--shadow)}.terminal{background:#05050b;border:1px solid var(--bd);border-radius:18px;padding:18px;font-family:'JetBrains Mono';font-size:12px;color:#b8c4ff;min-height:310px}.public-grid{max-width:1240px;margin:0 auto;padding:0 6vw 70px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.public-card{background:rgba(28,28,48,.78);border:1px solid var(--bd);border-radius:22px;padding:20px}.section-title{max-width:1240px;margin:20px auto;padding:0 6vw;font-size:34px;letter-spacing:-.04em}@media(max-width:900px){.hero-public{grid-template-columns:1fr}.public-nav nav{display:none}}
+</style>
+<div class="public-shell">
+<header class="public-nav"><a class="pub-logo" href="/"><div class="pub-mark">OX</div><div><b>ObserveX</b><div style="font-size:11px;color:var(--tx3)">AI Log Intelligence</div></div></a><nav style="display:flex;gap:18px;align-items:center;font-weight:800;font-size:13px"><a href="/product">Product</a><a href="/features">Features</a><a href="/security">Security</a><a href="/pricing">Pricing</a><a href="/api/docs">Docs</a><a class="btn btn-ghost btn-sm" href="/login">Sign in</a><a class="btn btn-primary btn-sm" href="/register">Start free</a></nav></header>
+{% if page == 'pricing' %}
+<h1 class="section-title">Simple plans for growing teams.</h1><section class="public-grid">{% for name,price,desc in [('Starter','₹0','Validate and demo'),('Growth','₹4,999/mo','Teams with real ingestion'),('Business','₹19,999/mo','SRE and production teams'),('Enterprise','Custom','Compliance, SSO and scale')] %}<div class="public-card"><div class="badge badge-info">{{name}}</div><h2 style="font-size:34px;margin:14px 0">{{price}}</h2><p style="color:var(--tx2)">{{desc}}</p><a class="btn btn-primary" style="margin-top:18px" href="/register">Choose plan</a></div>{% endfor %}</section>
+{% elif page == 'security' %}
+<h1 class="section-title">Built for sensitive logs.</h1><section class="public-grid">{% for t,d in [('PII masking','JWT, mobile, customer names, loan numbers, Aadhaar, PAN and tokens are masked automatically.'),('Audit trail','Track uploads, searches, exports, deletes, invites and admin changes.'),('Retention policies','Auto-delete old logs by plan or customer policy.'),('Safe sharing','Share masked RCA reports with expiring links.')] %}<div class="public-card"><h3>{{t}}</h3><p style="color:var(--tx2)">{{d}}</p></div>{% endfor %}</section>
+{% elif page == 'product' or page == 'features' %}
+<h1 class="section-title">Everything needed for incident intelligence.</h1><section class="public-grid">{% for t,d,i in [('Dashboard','Health, severity, RCA, smart tags and recommended actions.','📊'),('Log Search','Date/time, level, app, trace, file and message search with full log modal.','🔎'),('System Map','Dynamic API and dependency graph from real logs.','🔀'),('Change Impact','Compare releases and detect regressions.','🚀'),('API Ingestion','Raw and structured ingestion endpoint with API keys.','⚡'),('Admin Settings','Plans, roles, workspaces, invites, environments and retention.','⚙')] %}<div class="public-card"><div style="font-size:30px">{{i}}</div><h3>{{t}}</h3><p style="color:var(--tx2)">{{d}}</p></div>{% endfor %}</section>
+{% else %}
+<main class="hero-public"><section><div class="badge badge-info">AI-powered · now live</div><h1 class="hero-title" style="margin:18px 0">Debug production <span>before users complain.</span></h1><p style="font-size:18px;color:var(--tx2);max-width:680px">ObserveX turns MuleSoft, API, S3, JSON, Java, Node and CloudWatch logs into RCA, trace timelines, incident severity, dynamic system maps and safe customer-ready reports.</p><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:28px"><a class="btn btn-primary" href="/register">Create workspace →</a><a class="btn btn-ghost" href="/login">Sign in</a><a class="btn btn-ghost" href="/api/docs">View API docs</a></div></section><section class="hero-card"><div class="terminal">$ POST /api/v1/logs/ingest
+Authorization: Bearer ox_live_xxx
+
+{
+  "environment": "PROD",
+  "application": "s-paymentengine-api",
+  "eventId": "45673527-38365673-3987637",
+  "timestamp": "2026-04-25 14:51:17",
+  "payload": { "status": "Success" }
+}
+
+✓ schema detected: MuleSoft/API
+✓ PII masked
+✓ severity score: 74
+✓ RCA evidence generated</div></section></main><h2 class="section-title">What customers get</h2><section class="public-grid">{% for t,d,i in [('Demo mode','Show sample incidents instantly.','🧪'),('Onboarding wizard','Upload, S3 or API ingestion setup.','🧭'),('Queue ingestion','500MB+ files without blocking UI.','⚙️'),('RCA explainability','Every insight links to supporting traces.','🧠'),('Source health','Know whether API/S3/file ingestion is healthy.','📡'),('Customer-safe sharing','Masked expiring RCA report links.','🔗')] %}<div class="public-card"><div style="font-size:28px">{{i}}</div><h3>{{t}}</h3><p style="color:var(--tx2)">{{d}}</p></div>{% endfor %}</section>
+{% endif %}
 </div>
 {% endblock %}
