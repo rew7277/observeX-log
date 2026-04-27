@@ -32,6 +32,16 @@ mail = Mail(app)
 
 ALLOWED_EXT = {"log", "txt", "json"}
 
+# Railway volume/persistent storage. Mount a Railway volume and set OBSERVEX_DATA_DIR=/data.
+DATA_DIR = os.environ.get("OBSERVEX_DATA_DIR", "/data")
+UPLOAD_DIR = os.path.join(DATA_DIR, "observex_uploads")
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+except Exception:
+    # Local environments without /data can still run.
+    UPLOAD_DIR = os.path.join(os.getcwd(), "observex_uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 # ── Models ────────────────────────────────────────────────────────────────────
 class User(db.Model):
     id            = db.Column(db.Integer, primary_key=True)
@@ -264,9 +274,71 @@ def group_multiline_log_records(raw: str, default_file: str = ""):
     return records
 
 def mask_secrets(text: str):
-    text = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[MASKED_JWT]", text)
-    text = re.sub(r"(?i)(api[_-]?key|authorization|bearer|token|password|secret)(\s*[:=]\s*)([^\s,;\"]+)", r"\1\2[MASKED]", text)
-    return text
+    """Mask common Indian PII, secrets, account identifiers and tokens before any UI/API response."""
+    if not text:
+        return text
+
+    masked = str(text)
+
+    # JWT and long bearer-like tokens
+    masked = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[MASKED_JWT]", masked)
+    masked = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{16,}", r"\1[MASKED_TOKEN]", masked)
+    masked = re.sub(r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|token|password|passwd|pwd|secret|client[_-]?secret|signature|hmac)(\s*[=:]\s*['\"]?)([^\s,;\"'}]{4,})", r"\1\2[MASKED]", masked)
+
+    # Aadhaar: 12 digits, with optional spaces/hyphens. Keep explicit masking conservative enough for logs.
+    masked = re.sub(r"(?i)(aadhaar|aadhar|uidai)(\s*[=:]\s*['\"]?)(\d[ -]?){12}", r"\1\2[MASKED_AADHAAR]", masked)
+    masked = re.sub(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}\b", "[MASKED_AADHAAR]", masked)
+
+    # PAN card
+    masked = re.sub(r"(?i)(pan|panNumber|pan_card)(\s*[=:]\s*['\"]?)[A-Z]{5}\d{4}[A-Z]", r"\1\2[MASKED_PAN]", masked)
+    masked = re.sub(r"\b[A-Z]{5}\d{4}[A-Z]\b", "[MASKED_PAN]", masked)
+
+    # Indian mobile numbers, including +91 / 91 prefixes
+    masked = re.sub(r"(?i)(mobile|phone|customerMobile|contact|msisdn)(\s*[=:]\s*['\"]?)(?:\+?91[- ]?)?[6-9]\d{9}", r"\1\2[MASKED_MOBILE]", masked)
+    masked = re.sub(r"(?<!\d)(?:\+?91[- ]?)?[6-9]\d{9}(?!\d)", "[MASKED_MOBILE]", masked)
+
+    # Email addresses
+    masked = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[MASKED_EMAIL]", masked)
+
+    # Customer names and IDs found in JSON/log key-value pairs
+    sensitive_keys = [
+        "customerName", "name", "fullName", "firstName", "lastName",
+        "loanNumber", "loanId", "accountNumber", "accountNo", "primaryCustomerId",
+        "customerId", "applicationNo", "paymentId", "bbpsId", "receiptNumber",
+        "transactionId", "gatewayTransactionId", "upiId", "vpa", "cardNumber", "ifsc"
+    ]
+    key_alt = "|".join(map(re.escape, sensitive_keys))
+    masked = re.sub(rf"(?i)(\"(?:{key_alt})\"\s*:\s*\")([^\"]+)(\")", r"\1[MASKED]\3", masked)
+    masked = re.sub(rf"(?i)(\b(?:{key_alt})\b\s*[=:]\s*['\"]?)([A-Za-z0-9@._\- /]+)", r"\1[MASKED]", masked)
+
+    # Long numeric identifiers likely to be account/loan/reference numbers.
+    masked = re.sub(r"\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{6,}\b", "[MASKED_ID]", masked)
+
+    return masked
+
+
+def persist_raw_upload(user_id: int, session_id: int, filename: str, raw: str):
+    """Persist masked raw logs to Railway volume for audit/re-open without keeping sensitive values."""
+    safe_name = secure_filename(filename or "upload.log")[:120]
+    user_dir = os.path.join(UPLOAD_DIR, str(user_id))
+    os.makedirs(user_dir, exist_ok=True)
+    path = os.path.join(user_dir, f"session-{session_id}-{safe_name}.masked.log")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(mask_secrets(raw))
+    return path
+
+
+def delete_persisted_upload(user_id: int, session_id: int):
+    user_dir = os.path.join(UPLOAD_DIR, str(user_id))
+    if not os.path.isdir(user_dir):
+        return
+    prefix = f"session-{session_id}-"
+    for name in os.listdir(user_dir):
+        if name.startswith(prefix):
+            try:
+                os.remove(os.path.join(user_dir, name))
+            except OSError:
+                pass
 
 def build_log_rows(records, env, filename=""):
     rows=[]
@@ -363,7 +435,7 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         msg=r['message']
         key = extract_first([
             r"(?:Exception|ERROR|Error|failed|failure)[:\s]+([A-Za-z0-9_.:-]+)",
-            r"(JWT|token|timeout|Salesforce|\.Net pdf|GoogleSecops|Gupshup|OTP|connection|bad request|gateway)"
+            r"(JWT|token|timeout|connection|bad request|gateway|unauthorized|forbidden|exception|failure)"
         ], msg, "General error")
         top_errors[key]=top_errors.get(key,0)+1
     top_errors=sorted(top_errors.items(), key=lambda x:x[1], reverse=True)[:10]
@@ -625,6 +697,12 @@ def analyse():
                         apps_found=",".join(result["apps"]))
         db.session.add(ls)
         db.session.commit()
+        try:
+            persist_raw_upload(user.id, ls.id, fname, raw)
+        except Exception:
+            app.logger.exception("Could not persist upload to volume")
+        result["session_id"] = ls.id
+        result["stored"] = True
         return jsonify(result)
     except Exception as exc:
         db.session.rollback()
@@ -663,7 +741,11 @@ def api_ingest():
     )
     db.session.add(ls)
     db.session.commit()
-    return jsonify({"status": "ok", "session_id": ls.id, **result})
+    try:
+        persist_raw_upload(user.id, ls.id, app_n, raw)
+    except Exception:
+        app.logger.exception("Could not persist API ingestion to volume")
+    return jsonify({"status": "ok", "session_id": ls.id, "stored": True, **result})
 
 # ── Alert rules ───────────────────────────────────────────────────────────────
 @app.route("/alerts", methods=["GET", "POST", "DELETE"])
@@ -704,9 +786,13 @@ def history():
         q = LogSession.query.filter_by(user_id=uid)
         if sid:
             item = q.filter_by(id=sid).first()
-            if item: db.session.delete(item)
+            if item:
+                delete_persisted_upload(uid, item.id)
+                db.session.delete(item)
         else:
-            for item in q.all(): db.session.delete(item)
+            for item in q.all():
+                delete_persisted_upload(uid, item.id)
+                db.session.delete(item)
         db.session.commit()
         return jsonify({'status':'deleted'})
     sessions = LogSession.query.filter_by(user_id=uid)\
@@ -778,6 +864,32 @@ def settings_environments():
             db.session.commit()
         return jsonify({"environments": get_user_environments(user)})
     return jsonify({"environments": get_user_environments(user), "defaults": DEFAULT_ENVIRONMENTS})
+
+
+@app.route("/api/docs")
+@login_required
+def api_docs():
+    user = get_current_user()
+    return jsonify({
+        "auth": "Authorization: Bearer <api_key>",
+        "base_url": request.host_url.rstrip("/"),
+        "ingest": {
+            "method": "POST",
+            "path": "/api/v1/logs/ingest",
+            "request": {
+                "environment": "PROD",
+                "application": "s-paymentengine-api",
+                "logs": "INFO 2026-04-25 14:51:17 ..."
+            },
+            "success_response": {"status":"ok", "session_id":123, "stored": True, "errors":0, "warns":0},
+            "failure_responses": {"401":"Missing/invalid API key", "400":"logs field required", "413":"payload exceeds MAX_UPLOAD_MB"},
+            "notes": [
+                "Logs are masked for JWT, tokens, PAN, Aadhaar, mobile, customer names, loan/account/payment identifiers before returning to UI.",
+                "Set OBSERVEX_DATA_DIR=/data when using Railway Volume to persist masked uploads.",
+                "For 500MB+ production ingestion, prefer direct API/S3 streaming over browser upload."
+            ]
+        }
+    })
 
 # ── Profile / API key ─────────────────────────────────────────────────────────
 @app.route("/profile/apikey", methods=["POST"])

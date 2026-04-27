@@ -146,3 +146,30 @@ This package has been updated to make ObserveX simpler, more unique and more pro
 - Kept existing API ingestion, alert rules, session history, CSV export and auth flow.
 
 The backend changes are in `analyse_log_text()` inside `app.py`. The updated product UX is in `templates/dashboard.html`.
+
+## v5 SaaS/security update
+
+### Railway volume memory
+Mount a Railway volume at `/data` and set:
+
+```bash
+OBSERVEX_DATA_DIR=/data
+MAX_UPLOAD_MB=500
+```
+
+ObserveX stores a masked copy of each uploaded/API-ingested log under `/data/observex_uploads/<user-id>/`. Deleting an upload from Upload History removes the saved summary and the masked persisted log file.
+
+### PII and secret masking
+Before logs are displayed, exported, stored in the Railway volume, or returned by API responses, ObserveX masks:
+
+- JWT and bearer tokens
+- API keys, access tokens, refresh tokens, passwords, secrets, signatures and HMAC values
+- Aadhaar numbers
+- PAN card numbers
+- Indian mobile numbers
+- Email addresses
+- Customer names
+- Customer IDs, loan IDs, loan numbers, account numbers, application numbers
+- Payment IDs, BBPS IDs, UPI/VPA, receipt IDs and transaction IDs
+
+For enterprise SaaS, keep masked storage as the default and add encrypted raw retention only as an admin-controlled option.
