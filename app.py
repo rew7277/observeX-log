@@ -68,7 +68,7 @@ _db_init_lock = threading.Lock()
 
 def init_db_once():
     with _db_init_lock:
-        db.create_all(checkfirst=True)
+        db.create_all()
 
 with app.app_context():
     init_db_once()
