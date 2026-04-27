@@ -131,3 +131,18 @@ observex/
     ├── reset_password.html
     └── dashboard.html   # Full SPA-style dashboard
 ```
+
+## v4 Intelligent Debugging Update
+
+This package has been updated to make ObserveX simpler, more unique and more productive:
+
+- Replaced tool-first landing page with a **What’s wrong right now?** dashboard.
+- Added natural-language style search input for questions like `OTP failures today`, `slow Salesforce traces`, and `JWT errors`.
+- Added automatic **root-cause hypothesis** generation from repeated errors, hot traces, dependencies and latency.
+- Added **guided debugging** cards: failing trace, top impacted app, dependency signal and deployment readiness.
+- Added application health scoring and an error timeline in the System Map.
+- Added trace explanation so users can understand why a trace matters before reading raw logs.
+- Changed Deployment Validation into **Change Impact**, focused on release decisions instead of manual table comparison.
+- Kept existing API ingestion, alert rules, session history, CSV export and auth flow.
+
+The backend changes are in `analyse_log_text()` inside `app.py`. The updated product UX is in `templates/dashboard.html`.

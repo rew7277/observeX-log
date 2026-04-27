@@ -313,19 +313,72 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         {"label": f"Avg {avg_lat}ms · P95 {p95}ms · P99 {p99}ms", "type": "warn" if p95 > 3000 else "info"},
         {"label": f"Trace/Event IDs found: {len(traces)}", "type": "info"},
     ]
+    # Intelligence layer: turn raw logs into a problem-first debugging view.
+    trace_counts={}
+    for r in rows:
+        tid=r.get('trace') or r.get('event')
+        if tid:
+            trace_counts.setdefault(tid, {"count":0,"errors":0,"latency":0,"app":r.get('app','unknown'),"sample":r.get('message','')})
+            trace_counts[tid]["count"] += 1
+            trace_counts[tid]["errors"] += 1 if r.get('level') == 'ERROR' else 0
+            trace_counts[tid]["latency"] = max(trace_counts[tid]["latency"], int(r.get('latency') or 0))
+    hot_traces=sorted([{ "trace":k, **v } for k,v in trace_counts.items()], key=lambda x:(x["errors"], x["latency"], x["count"]), reverse=True)[:8]
+
+    by_app={}
+    for r in rows:
+        a=r.get('app') or 'unknown'
+        by_app.setdefault(a,{"lines":0,"errors":0,"warns":0,"latencies":[]})
+        by_app[a]["lines"]+=1
+        by_app[a]["errors"]+=1 if r.get('level')=='ERROR' else 0
+        by_app[a]["warns"]+=1 if r.get('level')=='WARN' else 0
+        if r.get('latency'): by_app[a]["latencies"].append(r['latency'])
+    app_health=[]
+    for a,v in by_app.items():
+        avg=round(sum(v['latencies'])/len(v['latencies'])) if v['latencies'] else 0
+        severity='critical' if v['errors'] else ('warn' if v['warns'] or avg>3000 else 'ok')
+        app_health.append({"app":a,"lines":v['lines'],"errors":v['errors'],"warns":v['warns'],"avg_latency":avg,"severity":severity})
+    app_health=sorted(app_health, key=lambda x:(x['severity']!='critical', -x['errors'], -x['avg_latency']))[:12]
+
+    time_buckets={}
+    for r in rows:
+        t=str(r.get('time') or '')[:16]
+        if t:
+            time_buckets.setdefault(t,{"total":0,"errors":0,"warns":0})
+            time_buckets[t]['total']+=1
+            time_buckets[t]['errors']+=1 if r.get('level')=='ERROR' else 0
+            time_buckets[t]['warns']+=1 if r.get('level')=='WARN' else 0
+    timeline_buckets=[{"time":k, **v} for k,v in sorted(time_buckets.items())[-30:]]
+
+    suspected=[]
+    if top_errors: suspected.append(f"Most repeated error cluster is '{top_errors[0][0]}' with {top_errors[0][1]} hits")
+    if hot_traces and hot_traces[0]['errors']: suspected.append(f"Trace {hot_traces[0]['trace']} carries the highest failure signal")
+    if deps and (errors or p95>3000): suspected.append("External dependency involvement detected: " + ", ".join(deps[:4]))
+    if p95>3000: suspected.append(f"Latency hotspot detected: P95 {p95}ms")
+    root_cause = suspected[0] if suspected else "No strong failure pattern detected in the current upload"
+
     suggestions=[]
-    if len(apps)>1: suggestions.append("Use Logs Search > Application filter to analyse each API separately.")
-    if errors: suggestions.append("Open the first failing trace/event in Trace Explorer and check the previous 10 log lines.")
-    if p95>3000: suggestions.append("Latency hotspot detected. Check external dependency calls and timeout/retry configuration.")
+    if errors: suggestions.append("Start with Guided Debugging: inspect the top failed trace and compare the 10 preceding log lines.")
+    if top_errors: suggestions.append("Group similar errors and assign ownership by app/dependency instead of reading raw logs line by line.")
+    if len(apps)>1: suggestions.append("Use application health cards to isolate one API before opening the raw log table.")
+    if p95>3000: suggestions.append("Investigate dependency timeout/retry settings and slow external calls before scaling infrastructure.")
     if 'JWT / Token' in smart_tags: suggestions.append("JWT/token logs detected. Mask secrets before sharing screenshots or reports.")
-    if not suggestions: suggestions.append("No major hotspot detected. Continue with environment/date/app filtering for validation.")
+    if not suggestions: suggestions.append("System looks stable. Save this upload as the baseline for deployment comparison.")
     score=max(0, min(100, 100 - min(50, error_rate*5) - min(25, warn_rate*2) - (15 if p95>3000 else 0)))
+    action_cards=[
+        {"title":"Investigate failing trace","value": hot_traces[0]['trace'] if hot_traces else "No trace yet", "type":"critical" if errors else "ok"},
+        {"title":"Check top app", "value": app_health[0]['app'] if app_health else "Unknown", "type": app_health[0]['severity'] if app_health else "warn"},
+        {"title":"Review dependency", "value": deps[0] if deps else "No dependency signal", "type":"warn" if deps else "ok"},
+        {"title":"Deploy readiness", "value": f"Health {round(score)}/100", "type":"critical" if error_rate>5 else ("warn" if warn_rate>10 or p95>3000 else "ok")},
+    ]
+    deploy_summary={"errors_delta":"baseline needed","latency_delta":"baseline needed","health_score":round(score),"recommendation":"Block release until critical errors are explained." if errors and round(score)<70 else "Safe to continue with monitoring."}
     return {
         "environment": detected_env, "total": total, "original_total": len(all_rows), "errors": len(errors), "warns": len(warns),
         "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
         "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
         "top_errors": top_errors, "findings": findings, "suggestions": suggestions, "smart_tags": smart_tags,
         "dependencies": deps, "health_score": round(score), "log_rows": rows[:1200],
+        "root_cause": root_cause, "hot_traces": hot_traces, "app_health": app_health,
+        "timeline_buckets": timeline_buckets, "action_cards": action_cards, "deploy_summary": deploy_summary,
         "preview": "\n".join(lines[:500]),
         "flow": "Client → " + " → ".join(apps[:5]) + (" → External Dependencies" if deps else "") if apps else "",
         "error_lines": [r['message'] for r in errors[:50]], "slow_lines": [r['message'] for r in rows if r.get('latency',0)>3000][:50],
