@@ -235,13 +235,45 @@ def parse_search_query(query: str):
     if remaining: filters['free'] = remaining
     return filters
 
-def build_log_rows(lines, env, filename=""):
-    rows=[]
-    current_app=""; current_file=filename
-    for idx,line in enumerate(lines):
+LOG_HEADER_RE = re.compile(r"^(?:INFO|ERROR|WARN|WARNING|DEBUG|TRACE|FATAL|SUCCESS|FAILURE)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,.]\d{3}", re.I)
+
+def group_multiline_log_records(raw: str, default_file: str = ""):
+    records = []
+    current = None
+    current_file = default_file
+    for idx, line in enumerate(raw.splitlines(), start=1):
         fm = re.search(r"--- FILE:\s*([^\n]+?)\s*---", line)
         if fm:
-            current_file=fm.group(1).strip(); continue
+            if current:
+                records.append(current)
+                current = None
+            current_file = fm.group(1).strip()
+            continue
+        if not line.strip():
+            if current:
+                current["message"].append(line)
+            continue
+        if LOG_HEADER_RE.search(line) or current is None:
+            if current:
+                records.append(current)
+            current = {"line_no": idx, "file": current_file, "message": [line]}
+        else:
+            current["message"].append(line)
+    if current:
+        records.append(current)
+    return records
+
+def mask_secrets(text: str):
+    text = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[MASKED_JWT]", text)
+    text = re.sub(r"(?i)(api[_-]?key|authorization|bearer|token|password|secret)(\s*[:=]\s*)([^\s,;\"]+)", r"\1\2[MASKED]", text)
+    return text
+
+def build_log_rows(records, env, filename=""):
+    rows=[]
+    current_app=""; current_file=filename
+    for rec in records:
+        line = "\n".join(rec.get("message") or [])
+        current_file = rec.get("file") or current_file
         app = extract_first([
             r"\[([a-zA-Z][a-zA-Z0-9_-]*(?:api|API)[a-zA-Z0-9_-]*)\]",
             r'"ApplicationName"\s*:\s*"([^"\n]+)"',
@@ -251,12 +283,21 @@ def build_log_rows(lines, env, filename=""):
         trace = extract_trace_id(line)
         status = extract_first([r'"HttpStatus"\s*:\s*(\d{3})', r"(?:status|statusCode|httpStatus)\s*[=:]\s*(\d{3})", r"\b(5\d\d|4\d\d|2\d\d)\b"], line, "")
         lat = extract_first([r"(?:latency|duration|timeTaken|elapsed)\s*[=: ]+([0-9]+)", r"completed in\s+([0-9]+)\s*ms"], line, "")
+        if not lat:
+            times = re.findall(r'"TimestampIST"\s*:\s*"([^"]+)"', line, re.I)
+            if len(times) >= 2:
+                try:
+                    t1=datetime.datetime.fromisoformat(times[0].replace('Z',''))
+                    t2=datetime.datetime.fromisoformat(times[-1].replace('Z',''))
+                    lat = str(max(0, int((t2-t1).total_seconds()*1000)))
+                except Exception:
+                    lat = ""
         flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
         rows.append({
-            "line_no": idx+1, "time": extract_time(line, f"line {idx+1}"), "env": env,
+            "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
             "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
-            "message": line[:1200]
+            "message": mask_secrets(line), "is_multiline": "\n" in line
         })
     return rows
 
@@ -282,9 +323,9 @@ def row_matches_filters(row, filters):
     return True
 
 def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = ""):
-    all_lines = [l for l in raw.splitlines() if l.strip()]
+    records = group_multiline_log_records(raw, filename)
     detected_env = infer_environment(raw[:5000], env)
-    all_rows = build_log_rows(all_lines, detected_env, filename)
+    all_rows = build_log_rows(records, detected_env, filename)
     filters = parse_search_query(query)
     rows = [r for r in all_rows if row_matches_filters(r, filters)]
     lines = [r['message'] for r in rows]
@@ -398,11 +439,11 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
     ]
     deploy_summary={"errors_delta":"baseline needed","latency_delta":"baseline needed","health_score":round(score),"recommendation":"Block release until critical errors are explained." if errors and round(score)<70 else "Safe to continue with monitoring."}
     return {
-        "environment": detected_env, "total": total, "original_total": len(all_rows), "errors": len(errors), "warns": len(warns),
+        "environment": detected_env, "total": total, "original_total": len(all_rows), "physical_lines": len(raw.splitlines()), "errors": len(errors), "warns": len(warns),
         "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
         "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
         "top_errors": top_errors, "findings": findings, "suggestions": suggestions, "smart_tags": smart_tags,
-        "dependencies": deps, "health_score": round(score), "log_rows": rows[:1200],
+        "dependencies": deps, "health_score": round(score), "log_rows": rows[:2000],
         "root_cause": root_cause, "hot_traces": hot_traces, "app_health": app_health,
         "timeline_buckets": timeline_buckets, "action_cards": action_cards, "deploy_summary": deploy_summary,
         "preview": "\n".join(lines[:500]),
