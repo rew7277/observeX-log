@@ -133,117 +133,204 @@ def percentile(values, pct):
         return values[f]
     return round(values[f] + (values[c]-values[f]) * (k-f))
 
+
 def detect_level(line: str):
-    if re.search(r"error|exception|failed|fatal|timeout|500|HTTP 5", line, re.I):
+    if re.search(r"\b(ERROR|FATAL|SEVERE)\b|exception|failed|timeout|gateway timeout|bad request|\b5\d\d\b", line, re.I):
         return "ERROR"
-    if re.search(r"warn|slow|retry|429|HTTP 4", line, re.I):
+    if re.search(r"\b(WARN|WARNING)\b|retry|slow|\b4\d\d\b", line, re.I):
         return "WARN"
     return "INFO"
 
 def extract_first(patterns, text, default=""):
     for pat in patterns:
-        m = re.search(pat, text, re.I)
+        m = re.search(pat, text, re.I | re.S)
         if m:
-            return m.group(1)
+            return (m.group(1) or "").strip()
     return default
+
+def uniq(seq, limit=200):
+    out=[]; seen=set()
+    for x in seq:
+        if not x: continue
+        x=str(x).strip().strip('"\'')
+        if not x or x.lower() in seen: continue
+        seen.add(x.lower()); out.append(x)
+        if len(out)>=limit: break
+    return out
+
+def infer_environment(text: str, selected: str = "PROD"):
+    selected = (selected or "PROD").upper()
+    low = text.lower()
+    for env in ["PROD", "UAT", "SIT", "DEV", "PREPROD", "DR", "SANDBOX"]:
+        if re.search(rf"\b{env.lower()}\b|{env.lower()}[-_.]", low):
+            return env
+    if "hyderabad" in low or "hyd-dr" in low: return "DR"
+    if "mumbai" in low and "prod" in low: return "PROD"
+    return selected
+
+def extract_apps(text: str):
+    apps=[]
+    apps += re.findall(r"\[([a-zA-Z][a-zA-Z0-9_-]*(?:api|API)[a-zA-Z0-9_-]*)\]", text)
+    apps += re.findall(r'"ApplicationName"\s*:\s*"([^"\n]+)"', text, re.I)
+    apps += re.findall(r"(?:app|application|service|applicationName)\s*[=:]\s*['\"]?([a-zA-Z0-9_.-]+)", text, re.I)
+    apps += [m for m in re.findall(r"--- FILE:\s*([^\n]+?)\s*---", text) if "api" in m.lower()]
+    cleaned=[]
+    for a in apps:
+        a=a.strip()
+        a=re.sub(r"\.(log|txt|json)$", "", a, flags=re.I)
+        a=re.sub(r"(-api)-\d+$", r"\1", a, flags=re.I)
+        cleaned.append(a)
+    return uniq(cleaned, 100)
+
+def extract_trace_id(line: str):
+    return extract_first([
+        r"correlationId\"?\s*[:=]\s*\"?([a-zA-Z0-9-]{12,})",
+        r"\bevent:\s*([a-zA-Z0-9-]{12,})",
+        r"(?:traceId|trace|correlation-id|eventId|event-id)\s*[:=]\s*\"?([a-zA-Z0-9-]{8,})",
+    ], line, "")
+
+def extract_time(line: str, fallback: str = ""):
+    return extract_first([
+        r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?)",
+        r"(\d{2}:\d{2}:\d{2}(?:[,.]\d+)?)",
+    ], line, fallback)
 
 def parse_search_query(query: str):
     filters = {}
-    if not query:
-        return filters
+    if not query: return filters
     q = query.strip()
     for k, v in re.findall(r'(\w+):"([^"]+)"', q):
+        filters[k.lower()] = v; q = q.replace(f'{k}:"{v}"', '')
+    for k, op, v in re.findall(r'(latency|duration|timeTaken|avg)\s*([><=])\s*(\d+)', q, re.I):
+        filters['latency_op'] = op; filters['latency_value'] = int(v)
+    for k, v in re.findall(r'(env|environment|app|application|level|trace|traceid|event|eventid|flow|status|message|file|source|date)\s*:\s*([^\s]+)', q, re.I):
         filters[k.lower()] = v
-        q = q.replace(f'{k}:"{v}"', "")
-    for k, op, v in re.findall(r'(latency|duration|timeTaken)\s*([><=])\s*(\d+)', q, re.I):
-        filters['latency_op'] = op
-        filters['latency_value'] = int(v)
-    for k, v in re.findall(r'(env|environment|app|application|level|trace|traceid|event|eventid|flow|status|message):([^\s]+)', q, re.I):
-        filters[k.lower()] = v
-    remaining = re.sub(r'\w+:"[^"]+"|\w+:[^\s]+|(latency|duration|timeTaken)\s*[><=]\s*\d+', "", query, flags=re.I).strip()
-    if remaining:
-        filters['free'] = remaining
+    remaining = re.sub(r'\w+:"[^"]+"|\w+\s*:\s*[^\s]+|(latency|duration|timeTaken|avg)\s*[><=]\s*\d+', '', query, flags=re.I).strip()
+    if remaining: filters['free'] = remaining
     return filters
 
-def line_matches_filters(line, filters, env):
-    if not filters:
-        return True
-    low = line.lower()
-    if filters.get('env') and filters['env'].lower() != env.lower() and filters['env'].lower() not in low:
-        return False
-    if filters.get('environment') and filters['environment'].lower() != env.lower() and filters['environment'].lower() not in low:
-        return False
-    for key in ('app','application','level','trace','traceid','event','eventid','flow','status','message','free'):
-        if key in filters and filters[key].lower() not in low:
-            return False
+def build_log_rows(lines, env, filename=""):
+    rows=[]
+    current_app=""; current_file=filename
+    for idx,line in enumerate(lines):
+        fm = re.search(r"--- FILE:\s*([^\n]+?)\s*---", line)
+        if fm:
+            current_file=fm.group(1).strip(); continue
+        app = extract_first([
+            r"\[([a-zA-Z][a-zA-Z0-9_-]*(?:api|API)[a-zA-Z0-9_-]*)\]",
+            r'"ApplicationName"\s*:\s*"([^"\n]+)"',
+            r"(?:app|application|service|applicationName)\s*[=:]\s*['\"]?([a-zA-Z0-9_.-]+)"
+        ], line, current_app or "unknown")
+        if app != "unknown": current_app=app
+        trace = extract_trace_id(line)
+        status = extract_first([r'"HttpStatus"\s*:\s*(\d{3})', r"(?:status|statusCode|httpStatus)\s*[=:]\s*(\d{3})", r"\b(5\d\d|4\d\d|2\d\d)\b"], line, "")
+        lat = extract_first([r"(?:latency|duration|timeTaken|elapsed)\s*[=: ]+([0-9]+)", r"completed in\s+([0-9]+)\s*ms"], line, "")
+        flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
+        rows.append({
+            "line_no": idx+1, "time": extract_time(line, f"line {idx+1}"), "env": env,
+            "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
+            "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
+            "message": line[:1200]
+        })
+    return rows
+
+def row_matches_filters(row, filters):
+    if not filters: return True
+    hay = " ".join(str(v) for v in row.values()).lower()
+    envf = (filters.get('env') or filters.get('environment'))
+    if envf and envf.lower() != str(row.get('env','')).lower(): return False
+    keymap = {'application':'app','traceid':'trace','eventid':'event','source':'file','date':'time'}
+    for k,v in filters.items():
+        if k in {'latency_op','latency_value','env','environment'}: continue
+        col = keymap.get(k,k)
+        if col in row:
+            if str(v).lower() not in str(row.get(col,'')).lower(): return False
+        elif k == 'free':
+            for term in str(v).lower().split():
+                if term not in hay: return False
     if 'latency_value' in filters:
-        lat = extract_first([r"(?:latency|duration|timeTaken)[=: ]+(\d+)"], line, None)
-        if lat is None:
-            return False
-        lat = int(lat); val = filters['latency_value']; op = filters.get('latency_op', '>')
+        val=filters['latency_value']; lat=int(row.get('latency') or 0); op=filters.get('latency_op','>')
         if op == '>' and not lat > val: return False
         if op == '<' and not lat < val: return False
         if op == '=' and not lat == val: return False
     return True
 
-def analyse_log_text(raw: str, query: str = "", env: str = "PROD"):
+def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = ""):
     all_lines = [l for l in raw.splitlines() if l.strip()]
+    detected_env = infer_environment(raw[:5000], env)
+    all_rows = build_log_rows(all_lines, detected_env, filename)
     filters = parse_search_query(query)
-    lines = [l for l in all_lines if line_matches_filters(l, filters, env)]
+    rows = [r for r in all_rows if row_matches_filters(r, filters)]
+    lines = [r['message'] for r in rows]
     joined = "\n".join(lines)
 
-    errors = [l for l in lines if detect_level(l) == "ERROR"]
-    warns = [l for l in lines if detect_level(l) == "WARN"]
-    lats = [int(m.group(1)) for m in re.finditer(r"(?:latency|duration|timeTaken)[=: ]+(\d+)", joined, re.I)]
-    statuses = [m.group(1) for m in re.finditer(r"(?:status|statusCode|httpStatus)[=: ]+(\d{3})", joined, re.I)]
-    apps = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:app|application|service)[=: ]([a-zA-Z0-9_\-.]+)", joined, re.I)))
-    traces = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:traceId|trace|correlationId|correlation-id)[=: ]([a-zA-Z0-9\-]+)", joined, re.I)))
-    events = list(dict.fromkeys(m.group(1) for m in re.finditer(r"(?:eventId|event|event-id)[=: ]([a-zA-Z0-9\-]+)", joined, re.I)))
+    errors = [r for r in rows if r['level'] == 'ERROR']
+    warns  = [r for r in rows if r['level'] == 'WARN']
+    apps   = extract_apps(raw) or uniq([r['app'] for r in rows if r['app'] != 'unknown'])
+    traces = uniq([r['trace'] for r in rows if r.get('trace')], 250)
+    lats   = [r['latency'] for r in rows if r.get('latency')]
+    json_latencies=[]
+    for m in re.finditer(r'"TimestampIST"\s*:\s*"([^"]+)".*?"TimestampIST"\s*:\s*"([^"]+)"', raw, re.I|re.S):
+        try:
+            t1=datetime.datetime.fromisoformat(m.group(1).replace('Z',''))
+            t2=datetime.datetime.fromisoformat(m.group(2).replace('Z',''))
+            json_latencies.append(int((t2-t1).total_seconds()*1000))
+        except Exception:
+            pass
+    if not lats and json_latencies: lats=json_latencies
+
     avg_lat = round(sum(lats)/len(lats)) if lats else 0
     p95 = percentile(lats, 95); p99 = percentile(lats, 99)
-    error_rate = round(len(errors)/len(lines)*100, 2) if lines else 0
-    warn_rate = round(len(warns)/len(lines)*100, 2) if lines else 0
-    app_counts = {a: sum(1 for l in lines if a.lower() in l.lower()) for a in apps[:20]}
-    top_errors = {}
-    for line in errors:
-        key = extract_first([r"(?:Exception|ERROR|Error)[:\s]+([A-Za-z0-9_.:-]+)", r"(timeout|jwt|token|connection|bad request|gateway|failed)"], line, "General error")
-        top_errors[key] = top_errors.get(key, 0) + 1
-    top_errors = sorted(top_errors.items(), key=lambda x: x[1], reverse=True)[:10]
-    slow_lines = [l for l in lines if re.search(r"(?:latency|duration|timeTaken)[=: ]+([3-9]\d{3}|\d{5,})", l, re.I)]
-
-    timeline = []
-    for i, line in enumerate(lines[:300]):
-        timeline.append({
-            "time": extract_first([r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"], line, f"line {i+1}"),
-            "level": detect_level(line),
-            "app": extract_first([r"(?:app|application|service)[=: ]([a-zA-Z0-9_\-.]+)"], line, "unknown"),
-            "trace": extract_first([r"(?:traceId|trace|correlationId|correlation-id)[=: ]([a-zA-Z0-9\-]+)"], line, ""),
-            "event": extract_first([r"(?:eventId|event|event-id)[=: ]([a-zA-Z0-9\-]+)"], line, ""),
-            "latency": int(extract_first([r"(?:latency|duration|timeTaken)[=: ]+(\d+)"], line, "0")),
-            "message": line[:500]
-        })
-
+    total = len(rows)
+    error_rate = round(len(errors)/total*100, 2) if total else 0
+    warn_rate = round(len(warns)/total*100, 2) if total else 0
+    app_counts={}
+    for appn in apps:
+        app_counts[appn]=sum(1 for r in rows if appn.lower() in (r.get('app','')+' '+r.get('message','')).lower())
+    status_counts={}
+    for r in rows:
+        st=r.get('status')
+        if st: status_counts[st]=status_counts.get(st,0)+1
+    top_errors={}
+    for r in errors:
+        msg=r['message']
+        key = extract_first([
+            r"(?:Exception|ERROR|Error|failed|failure)[:\s]+([A-Za-z0-9_.:-]+)",
+            r"(JWT|token|timeout|Salesforce|\.Net pdf|GoogleSecops|Gupshup|OTP|connection|bad request|gateway)"
+        ], msg, "General error")
+        top_errors[key]=top_errors.get(key,0)+1
+    top_errors=sorted(top_errors.items(), key=lambda x:x[1], reverse=True)[:10]
+    tag_rules={
+        'JWT / Token': r'jwt|token', 'Salesforce': r'salesforce|sfdc', '.NET PDF': r'\.net pdf|pdf api|htmltopdf',
+        'Google SecOps': r'googlesecops|google secops', 'OTP / Gupshup': r'otp|gupshup|sms',
+        'Slow API': r'latency|duration|timeTaken|slow|timeout', 'External Dependency': r'salesforce|gupshup|\.net|google'
+    }
+    smart_tags=[name for name,pat in tag_rules.items() if re.search(pat, joined, re.I)]
+    deps=[name for name,pat in {'Salesforce':r'salesforce|sfdc','.NET PDF API':r'\.net pdf|pdf api','Google SecOps':r'googlesecops|google secops','Gupshup':r'gupshup|otp|sms'}.items() if re.search(pat, raw, re.I)]
     findings = [
-        {"label": f"{env}: {len(errors)} error line(s) detected", "type": "error" if errors else "ok"},
-        {"label": f"{len(warns)} warning/retry/slow line(s)", "type": "warn" if warns else "ok"},
-        {"label": f"Error rate {error_rate}% · Warning rate {warn_rate}%", "type": "info"},
-        {"label": f"P95 {p95}ms · P99 {p99}ms · Avg {avg_lat}ms", "type": "info"},
-        {"label": f"{len(apps)} application(s): {', '.join(apps[:6]) or 'none detected'}", "type": "ok"},
+        {"label": f"{detected_env}: {len(errors)} error line(s), {len(warns)} warning line(s)", "type": "error" if errors else ("warn" if warns else "ok")},
+        {"label": f"Applications detected: {', '.join(apps[:8]) or 'none'}", "type": "ok" if apps else "warn"},
+        {"label": f"Avg {avg_lat}ms · P95 {p95}ms · P99 {p99}ms", "type": "warn" if p95 > 3000 else "info"},
+        {"label": f"Trace/Event IDs found: {len(traces)}", "type": "info"},
     ]
-    suggestions = []
-    if errors: suggestions.append("Prioritise top error clusters and open Trace Explorer for the first failing trace/event.")
-    if p95 > 2000: suggestions.append("P95 latency is high. Review downstream calls, timeout settings and retries.")
-    if any('jwt' in l.lower() or 'token' in l.lower() for l in errors[:100]): suggestions.append("JWT/token failures detected. Validate auth policy, token expiry and gateway headers.")
-    if not suggestions: suggestions.append("No major hotspot detected. Try broader search or upload more logs.")
-
+    suggestions=[]
+    if len(apps)>1: suggestions.append("Use Logs Search > Application filter to analyse each API separately.")
+    if errors: suggestions.append("Open the first failing trace/event in Trace Explorer and check the previous 10 log lines.")
+    if p95>3000: suggestions.append("Latency hotspot detected. Check external dependency calls and timeout/retry configuration.")
+    if 'JWT / Token' in smart_tags: suggestions.append("JWT/token logs detected. Mask secrets before sharing screenshots or reports.")
+    if not suggestions: suggestions.append("No major hotspot detected. Continue with environment/date/app filtering for validation.")
+    score=max(0, min(100, 100 - min(50, error_rate*5) - min(25, warn_rate*2) - (15 if p95>3000 else 0)))
     return {
-        "total": len(lines), "original_total": len(all_lines), "errors": len(errors), "warns": len(warns),
+        "environment": detected_env, "total": total, "original_total": len(all_rows), "errors": len(errors), "warns": len(warns),
         "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
-        "apps": apps, "app_counts": app_counts, "traces": traces, "events": events, "statuses": statuses[:50],
-        "top_errors": top_errors, "findings": findings, "suggestions": suggestions,
-        "preview": "\n".join(lines[:500]), "flow": " → ".join(apps) if apps else "",
-        "error_lines": errors[:50], "slow_lines": slow_lines[:50], "timeline": timeline,
-        "query_help": "Use app:s-htmltopdf-api env:PROD level:ERROR trace:abc event:xyz latency>3000 message:\"JWT token\""
+        "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
+        "top_errors": top_errors, "findings": findings, "suggestions": suggestions, "smart_tags": smart_tags,
+        "dependencies": deps, "health_score": round(score), "log_rows": rows[:1200],
+        "preview": "\n".join(lines[:500]),
+        "flow": "Client → " + " → ".join(apps[:5]) + (" → External Dependencies" if deps else "") if apps else "",
+        "error_lines": [r['message'] for r in errors[:50]], "slow_lines": [r['message'] for r in rows if r.get('latency',0)>3000][:50],
+        "timeline": rows[:500],
+        "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11"
     }
 
 def send_reset_email(user):
@@ -357,6 +444,7 @@ def analyse():
         query = request.form.get("query", "")
         raw_parts = []
         fname = "paste"
+        fnames = []
 
         if "logfile" in request.files:
             files = request.files.getlist("logfile")
@@ -366,9 +454,12 @@ def analyse():
                 if not allowed_file(f.filename):
                     return jsonify({"error": f"Unsupported file type: {f.filename}. Upload .log, .txt or .json only."}), 400
                 fname = secure_filename(f.filename)
+                fnames.append(fname)
                 raw_parts.append(f"\n--- FILE: {fname} ---\n" + f.read().decode("utf-8", errors="replace"))
 
         raw = "".join(raw_parts)
+        if fnames:
+            fname = ", ".join(fnames[:6]) + ("..." if len(fnames) > 6 else "")
         if not raw and request.form.get("raw_paste"):
             raw = request.form["raw_paste"]
             fname = "paste"
@@ -376,7 +467,7 @@ def analyse():
         if not raw:
             return jsonify({"error": "No log content provided"}), 400
 
-        result = analyse_log_text(raw, query, env)
+        result = analyse_log_text(raw, query, env, fname)
         user = get_current_user()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
@@ -411,7 +502,7 @@ def api_ingest():
     if not raw:
         return jsonify({"error": "logs field required"}), 400
 
-    result = analyse_log_text(raw, "", env)
+    result = analyse_log_text(raw, "", env, app_n)
     ls = LogSession(
         user_id    = user.id,
         environment= env,
