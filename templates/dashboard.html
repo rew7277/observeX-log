@@ -1,0 +1,625 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · ObserveX{% endblock %}
+{% block body %}
+<div class="app-shell">
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">🔭</div>
+      <div>
+        <div class="brand-name">ObserveX</div>
+        <div class="brand-sub">Log Intelligence</div>
+      </div>
+    </div>
+
+    <div class="nav-section">Analyse</div>
+    <a class="nav-link active" onclick="showSection('overview')">
+      <span class="nav-icon">📊</span> Overview
+    </a>
+    <a class="nav-link" onclick="showSection('upload')">
+      <span class="nav-icon">⬆</span> Upload Logs
+    </a>
+    <a class="nav-link" onclick="showSection('api-ingest')">
+      <span class="nav-icon">⚡</span> API Ingestion
+    </a>
+    <a class="nav-link" onclick="showSection('s3')">
+      <span class="nav-icon">☁</span> S3 Connectors
+    </a>
+
+    <div class="nav-section" style="margin-top:12px">Explore</div>
+    <a class="nav-link" onclick="showSection('trace')">
+      <span class="nav-icon">🔍</span> Trace Explorer
+    </a>
+    <a class="nav-link" onclick="showSection('flow')">
+      <span class="nav-icon">🔀</span> Flow Analytics
+    </a>
+    <a class="nav-link" onclick="showSection('history')">
+      <span class="nav-icon">📋</span> Session History
+    </a>
+
+    <div class="nav-section" style="margin-top:12px">Config</div>
+    <a class="nav-link" onclick="showSection('alerts')">
+      <span class="nav-icon">🔔</span> Alert Rules
+    </a>
+    <a class="nav-link" onclick="showSection('settings')">
+      <span class="nav-icon">⚙</span> Settings & API Key
+    </a>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="avatar">{{ session.user_name[0].upper() }}</div>
+        <div>
+          <div class="user-name">{{ session.user_name }}</div>
+          <a href="{{ url_for('logout') }}" style="font-size:11px;color:var(--tx3)">Sign out</a>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main class="main">
+
+    <!-- ══ OVERVIEW ══ -->
+    <section id="sec-overview" class="section-panel">
+      <!-- Hero -->
+      <div style="background:var(--grad);border-radius:20px;padding:24px 28px;margin-bottom:20px;position:relative;overflow:hidden">
+        <div style="position:absolute;right:-30px;top:-40px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.06)"></div>
+        <div style="position:absolute;right:60px;bottom:-60px;width:150px;height:150px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+        <h2 style="font-size:22px;font-weight:700;color:#fff;margin-bottom:6px">Environment-wise Log Analyzer</h2>
+        <p style="color:rgba(255,255,255,.8);max-width:700px;font-size:13px;line-height:1.7">Upload logs by drag & drop, push through API, or sync from AWS S3. Analyse by environment, application, trace ID, event ID, latency, error trend and flow path.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;align-items:center">
+          <select id="env" class="select-styled" style="width:130px;background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff">
+            <option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option>
+          </select>
+          <input id="search" class="input" placeholder="Search event ID, trace ID, app, error…" style="max-width:340px;background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3);color:#fff">
+          <button class="btn" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="reanalyse()">🔍 Re-analyse</button>
+          <button class="btn" style="background:#fff;color:#5a5ef7" onclick="copyApiEndpoint()">⚡ Copy API Endpoint</button>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div class="metrics">
+        <div class="metric-card">
+          <div class="metric-val" id="m-total">0</div>
+          <div class="metric-lbl">Total log lines</div>
+          <div class="metric-icon">📄</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="m-errors" style="color:var(--rd)">0</div>
+          <div class="metric-lbl">Errors detected</div>
+          <div class="metric-icon">🚨</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="m-latency">0ms</div>
+          <div class="metric-lbl">Avg latency</div>
+          <div class="metric-icon">⏱</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="m-apps">0</div>
+          <div class="metric-lbl">Applications detected</div>
+          <div class="metric-icon">🧩</div>
+        </div>
+      </div>
+
+      <!-- Work grid -->
+      <div class="work-grid">
+        <!-- Upload + findings -->
+        <div class="card">
+          <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('drop-tab',this)">Drag & Drop</button>
+            <button class="tab-btn" onclick="switchTab('paste-tab',this)">Paste Logs</button>
+          </div>
+
+          <!-- Drop tab -->
+          <div id="drop-tab" class="tab-panel active">
+            <div id="drop-zone" class="drop-zone" onclick="document.getElementById('fileInput').click()">
+              <div class="drop-icon">⬆</div>
+              <h4>Drop .log / .txt / .json files</h4>
+              <p>MuleSoft, Node.js, Spring Boot, Python — any format.<br>Extracts: timestamp · app name · trace ID · event ID · latency · error reason</p>
+              <input type="file" id="fileInput" multiple accept=".log,.txt,.json" style="display:none">
+            </div>
+            <div id="upload-status" style="margin-top:10px;font-size:12px;color:var(--tx3)"></div>
+          </div>
+
+          <!-- Paste tab -->
+          <div id="paste-tab" class="tab-panel">
+            <textarea id="paste-area" class="input mono" rows="8" placeholder="Paste raw log lines here…" style="resize:vertical;line-height:1.8;font-size:12px"></textarea>
+            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="analysePaste()">Analyse Pasted Logs</button>
+          </div>
+        </div>
+
+        <!-- Findings -->
+        <div class="card">
+          <h3 style="font-size:15px;font-weight:700;margin-bottom:14px">⚡ Findings</h3>
+          <div id="findings">
+            <div class="finding-row">
+              <span style="color:var(--tx3)">No logs analysed yet</span>
+              <span class="badge badge-info">READY</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error lines preview -->
+      <div class="card" style="margin-top:16px;display:none" id="error-section">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">🚨 Error Lines (top 30)</h3>
+        <div id="error-lines" class="log-preview mono"></div>
+      </div>
+
+      <!-- Raw preview -->
+      <div class="card" style="margin-top:16px">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">📄 Raw Preview</h3>
+        <div id="raw-preview" class="log-preview mono">Waiting for logs…</div>
+      </div>
+    </section>
+
+    <!-- ══ TRACE EXPLORER ══ -->
+    <section id="sec-trace" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">🔍 Trace Explorer</div>
+        <div class="page-sub">Search logs by Trace ID or Event ID and open the full timeline.</div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input id="trace-q" class="input" placeholder="Enter traceId or eventId…" style="flex:1;max-width:400px">
+          <button class="btn btn-primary" onclick="traceSearch()">Search Traces</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">Trace Results</h3>
+        <div id="trace-results" style="color:var(--tx3);font-size:13px">Analyse logs first, then search by trace/event ID above.</div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:8px">Detected Trace IDs</h3>
+        <div id="trace-list" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;color:var(--tx3);font-size:13px">None yet</div>
+      </div>
+    </section>
+
+    <!-- ══ FLOW ANALYTICS ══ -->
+    <section id="sec-flow" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">🔀 Flow Analytics</div>
+        <div class="page-sub">App → API → downstream service flow with detected bottlenecks.</div>
+      </div>
+      <div class="card">
+        <div id="flow-diagram" style="font-size:14px;color:var(--tx3);padding:20px 0">Upload logs to render the application flow.</div>
+      </div>
+      <div class="bottom-grid" style="margin-top:0">
+        <div class="card">
+          <h3 style="font-size:14px;font-weight:700;margin-bottom:8px">Applications</h3>
+          <div id="flow-apps" style="color:var(--tx3);font-size:13px">None detected</div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;font-weight:700;margin-bottom:8px">High-latency Hops</h3>
+          <div id="flow-lats" style="color:var(--tx3);font-size:13px">—</div>
+        </div>
+        <div class="card">
+          <h3 style="font-size:14px;font-weight:700;margin-bottom:8px">Error Hotspots</h3>
+          <div id="flow-errs" style="color:var(--tx3);font-size:13px">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ SESSION HISTORY ══ -->
+    <section id="sec-history" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">📋 Session History</div>
+        <div class="page-sub">All your past log analysis sessions.</div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Environment</th><th>File / Source</th><th>Lines</th>
+                <th>Errors</th><th>Warns</th><th>Avg Latency</th><th>Apps</th><th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              {% for s in recent %}
+              <tr>
+                <td><span class="badge badge-info">{{ s.environment }}</span></td>
+                <td>{{ s.filename }}</td>
+                <td>{{ s.total_lines }}</td>
+                <td style="color:var(--rd)">{{ s.error_count }}</td>
+                <td style="color:#fbbf24">{{ s.warn_count }}</td>
+                <td>{{ s.avg_latency }}ms</td>
+                <td style="font-size:11px">{{ s.apps_found[:50] }}{% if s.apps_found|length > 50 %}…{% endif %}</td>
+                <td style="color:var(--tx3)">{{ s.created_at.strftime('%b %d %H:%M') }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="8" style="text-align:center;color:var(--tx3);padding:24px">No sessions yet — upload your first logs!</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ API INGESTION ══ -->
+    <section id="sec-api-ingest" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">⚡ API Ingestion</div>
+        <div class="page-sub">Push logs programmatically from any service using your API key.</div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">Your API Key</h3>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <code class="mono" id="api-key-display" style="background:var(--bg);padding:10px 14px;border-radius:10px;font-size:13px;border:1px solid var(--bd);flex:1;color:var(--cy)">{{ user.api_key }}</code>
+          <button class="btn btn-ghost btn-sm" onclick="copyKey()">📋 Copy</button>
+          <button class="btn btn-danger btn-sm" onclick="rotateKey()">🔄 Rotate</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">Code Examples</h3>
+        <div class="tabs" style="max-width:400px">
+          <button class="tab-btn active" onclick="switchTab('ex-curl',this)">cURL</button>
+          <button class="tab-btn" onclick="switchTab('ex-python',this)">Python</button>
+          <button class="tab-btn" onclick="switchTab('ex-node',this)">Node.js</button>
+        </div>
+        <div id="ex-curl" class="tab-panel active">
+          <pre class="mono log-preview" style="height:auto;padding:16px;font-size:12px;white-space:pre-wrap">curl -X POST {{ request.host_url }}api/v1/logs/ingest \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "environment": "PROD",
+    "application": "payment-engine",
+    "logs": "2024-01-15 12:00:01 ERROR timeout\n2024-01-15 12:00:02 INFO ok"
+  }'</pre>
+        </div>
+        <div id="ex-python" class="tab-panel">
+          <pre class="mono log-preview" style="height:auto;padding:16px;font-size:12px;white-space:pre-wrap">import requests
+
+response = requests.post(
+    "{{ request.host_url }}api/v1/logs/ingest",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    json={
+        "environment": "PROD",
+        "application": "payment-engine",
+        "logs": open("app.log").read()
+    }
+)
+print(response.json())</pre>
+        </div>
+        <div id="ex-node" class="tab-panel">
+          <pre class="mono log-preview" style="height:auto;padding:16px;font-size:12px;white-space:pre-wrap">const fs = require('fs');
+const res = await fetch('{{ request.host_url }}api/v1/logs/ingest', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    environment: 'PROD',
+    application: 'payment-engine',
+    logs: fs.readFileSync('app.log', 'utf8')
+  })
+});
+console.log(await res.json());</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ S3 CONNECTORS ══ -->
+    <section id="sec-s3" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">☁ S3 Connectors</div>
+        <div class="page-sub">Sync logs directly from AWS S3 buckets.</div>
+      </div>
+      <div class="card" style="max-width:600px">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px">Add S3 Bucket</h3>
+        <div style="display:grid;gap:12px">
+          <div>
+            <label class="lbl">Bucket name</label>
+            <input class="input" id="s3-bucket" placeholder="my-app-logs">
+          </div>
+          <div>
+            <label class="lbl">Region</label>
+            <input class="input" id="s3-region" placeholder="ap-south-1">
+          </div>
+          <div>
+            <label class="lbl">Prefix (optional)</label>
+            <input class="input" id="s3-prefix" placeholder="prod/mule/2024/">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <label class="lbl">AWS Access Key</label>
+              <input class="input" type="password" placeholder="AKIA…">
+            </div>
+            <div>
+              <label class="lbl">AWS Secret Key</label>
+              <input class="input" type="password" placeholder="••••••••">
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="alert('S3 connector saved! (Configure boto3 in production)')">Test & Save Connector</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ ALERTS ══ -->
+    <section id="sec-alerts" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">🔔 Alert Rules</div>
+        <div class="page-sub">Get notified when thresholds are breached.</div>
+      </div>
+
+      <div class="card" style="max-width:580px;margin-bottom:16px">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:14px">Create Alert Rule</h3>
+        <div style="display:grid;gap:12px">
+          <div>
+            <label class="lbl">Rule name</label>
+            <input class="input" id="alert-name" placeholder="High error rate in PROD">
+          </div>
+          <div>
+            <label class="lbl">Condition</label>
+            <select class="select-styled" id="alert-cond">
+              <option value="error_rate_gt">Error rate &gt; threshold %</option>
+              <option value="latency_gt">Avg latency &gt; threshold ms</option>
+              <option value="warn_gt">Warning count &gt; threshold</option>
+              <option value="no_heartbeat">Missing heartbeat</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Threshold value</label>
+            <input class="input" id="alert-threshold" type="number" placeholder="e.g. 5">
+          </div>
+          <button class="btn btn-primary" onclick="createAlert()">Add Rule</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">Active Rules</h3>
+        <div id="alerts-list">
+          {% for a in alerts %}
+          <div class="finding-row" id="alert-row-{{ a.id }}">
+            <span>{{ a.name }}</span>
+            <span style="color:var(--tx3);font-size:12px">{{ a.condition }} · {{ a.threshold }}</span>
+            <button class="btn btn-danger btn-sm" onclick="deleteAlert({{ a.id }})">Delete</button>
+          </div>
+          {% else %}
+          <div style="color:var(--tx3);font-size:13px">No alert rules yet.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ SETTINGS ══ -->
+    <section id="sec-settings" class="section-panel" style="display:none">
+      <div class="page-header">
+        <div class="page-title">⚙ Settings</div>
+        <div class="page-sub">Manage your account and API credentials.</div>
+      </div>
+      <div style="display:grid;gap:16px;max-width:600px">
+        <div class="card">
+          <h3 style="font-size:15px;font-weight:700;margin-bottom:14px">Account</h3>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+            <div class="avatar" style="width:50px;height:50px;border-radius:14px;font-size:18px">{{ session.user_name[0].upper() }}</div>
+            <div>
+              <div style="font-weight:700">{{ session.user_name }}</div>
+              <div style="font-size:12px;color:var(--tx3)">{{ user.email }}</div>
+            </div>
+          </div>
+          <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm">Sign out</a>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">API Key</h3>
+          <code class="mono" id="settings-api-key" style="display:block;background:var(--bg);padding:10px 14px;border-radius:10px;font-size:12px;border:1px solid var(--bd);color:var(--cy);word-break:break-all;margin-bottom:12px">{{ user.api_key }}</code>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="copyKey()">📋 Copy key</button>
+            <button class="btn btn-danger btn-sm" onclick="rotateKey()">🔄 Rotate key</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size:15px;font-weight:700;margin-bottom:12px">API Endpoint</h3>
+          <code class="mono" style="display:block;background:var(--bg);padding:10px 14px;border-radius:10px;font-size:12px;border:1px solid var(--bd);color:var(--gn)">POST {{ request.host_url }}api/v1/logs/ingest</code>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let _lastResult = null;
+let _rawLogs    = '';
+
+// ── Section routing ───────────────────────────────────────────────────────────
+function showSection(name){
+  document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');
+  document.querySelectorAll('.nav-link').forEach(a=>a.classList.remove('active'));
+  document.getElementById('sec-'+name).style.display='block';
+  event.currentTarget.classList.add('active');
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(panelId, btn){
+  const parent = btn.closest('.card, .section-panel') || document;
+  parent.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  parent.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Drop zone ─────────────────────────────────────────────────────────────────
+const dz = document.getElementById('drop-zone');
+['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag')}));
+['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag')}));
+dz.addEventListener('drop', async ev=>{
+  const files=[...ev.dataTransfer.files];
+  await uploadFiles(files);
+});
+document.getElementById('fileInput').addEventListener('change', async e=>{
+  await uploadFiles([...e.target.files]);
+});
+
+async function uploadFiles(files){
+  const fd = new FormData();
+  files.forEach(f=>fd.append('logfile', f));
+  fd.append('env', document.getElementById('env').value);
+  fd.append('query', document.getElementById('search').value);
+  document.getElementById('upload-status').textContent = `Uploading ${files.length} file(s)…`;
+  const res = await fetch('/analyse', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.error){alert(data.error);return;}
+  _rawLogs = data.preview;
+  _lastResult = data;
+  renderResult(data);
+  document.getElementById('upload-status').textContent = `✅ Analysed ${files.map(f=>f.name).join(', ')}`;
+}
+
+async function analysePaste(){
+  const raw = document.getElementById('paste-area').value.trim();
+  if(!raw){alert('Paste some log content first.');return;}
+  const fd = new FormData();
+  fd.append('raw_paste', raw);
+  fd.append('env', document.getElementById('env').value);
+  fd.append('query', document.getElementById('search').value);
+  const res = await fetch('/analyse', {method:'POST', body:fd});
+  const data = await res.json();
+  if(data.error){alert(data.error);return;}
+  _lastResult = data;
+  renderResult(data);
+}
+
+function reanalyse(){
+  if(!_lastResult){alert('Upload logs first.');return;}
+  const fd = new FormData();
+  fd.append('raw_paste', document.getElementById('raw-preview').textContent);
+  fd.append('env', document.getElementById('env').value);
+  fd.append('query', document.getElementById('search').value);
+  fetch('/analyse',{method:'POST',body:fd}).then(r=>r.json()).then(renderResult);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderResult(d){
+  document.getElementById('m-total').textContent   = d.total.toLocaleString();
+  document.getElementById('m-errors').textContent  = d.errors.toLocaleString();
+  document.getElementById('m-latency').textContent = d.latency+'ms';
+  document.getElementById('m-apps').textContent    = d.apps.length;
+
+  // Findings
+  const fc = d.findings.map(f=>`
+    <div class="finding-row">
+      <span>${escHtml(f.label)}</span>
+      <span class="badge badge-${f.type}">${f.type.toUpperCase()}</span>
+    </div>`).join('');
+  document.getElementById('findings').innerHTML = fc || '<div class="finding-row"><span style="color:var(--tx3)">No findings</span></div>';
+
+  // Preview
+  document.getElementById('raw-preview').textContent = d.preview || '(empty)';
+
+  // Error lines
+  if(d.error_lines && d.error_lines.length){
+    document.getElementById('error-section').style.display='block';
+    document.getElementById('error-lines').textContent = d.error_lines.join('\n');
+  }
+
+  // Flow
+  updateFlow(d);
+
+  // Traces
+  updateTraces(d);
+}
+
+function updateFlow(d){
+  const fd = document.getElementById('flow-diagram');
+  if(d.apps && d.apps.length){
+    fd.innerHTML = d.apps.map((a,i)=>`
+      <span style="display:inline-flex;align-items:center;gap:8px;margin:4px">
+        <span style="background:var(--sf2);border:1px solid var(--bd2);padding:6px 14px;border-radius:10px;font-weight:600;font-size:13px">${escHtml(a)}</span>
+        ${i<d.apps.length-1?'<span style="color:var(--ac);font-size:18px">→</span>':''}
+      </span>`).join('');
+    document.getElementById('flow-apps').innerHTML = d.apps.map(a=>`<span class="badge badge-info" style="margin:2px">${escHtml(a)}</span>`).join('');
+  } else {
+    fd.textContent = 'No application flow detected. Include "application=appName" in your logs.';
+  }
+  document.getElementById('flow-lats').textContent = d.latency ? d.latency+'ms avg' : '—';
+  document.getElementById('flow-errs').textContent = d.errors ? d.errors+' error line(s)' : 'None';
+}
+
+function updateTraces(d){
+  const tl = document.getElementById('trace-list');
+  if(d.traces && d.traces.length){
+    tl.innerHTML = d.traces.map(t=>`<span class="badge badge-ok" style="cursor:pointer" onclick="quickTrace('${escHtml(t)}')">${escHtml(t)}</span>`).join('');
+  } else {
+    tl.textContent = 'None detected';
+  }
+}
+
+function traceSearch(){
+  const q = document.getElementById('trace-q').value.trim();
+  if(!q){alert('Enter a trace or event ID');return;}
+  if(!_lastResult){alert('Analyse logs first');return;}
+  const raw = document.getElementById('raw-preview').textContent;
+  const lines = raw.split('\n').filter(l=>l.includes(q));
+  const el = document.getElementById('trace-results');
+  if(!lines.length){el.innerHTML='<span style="color:var(--rd)">No lines matched that ID.</span>';return;}
+  el.innerHTML = `<div class="log-preview mono">${lines.map(l=>escHtml(l)).join('\n')}</div>`;
+}
+
+function quickTrace(id){
+  document.getElementById('trace-q').value = id;
+  showSection('trace');
+  traceSearch();
+}
+
+// ── Alerts ────────────────────────────────────────────────────────────────────
+async function createAlert(){
+  const name = document.getElementById('alert-name').value.trim();
+  const cond = document.getElementById('alert-cond').value;
+  const thr  = parseFloat(document.getElementById('alert-threshold').value);
+  if(!name||isNaN(thr)){alert('Fill in all fields.');return;}
+  const res  = await fetch('/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,condition:cond,threshold:thr})});
+  const data = await res.json();
+  const list = document.getElementById('alerts-list');
+  // remove "no rules" placeholder
+  if(list.querySelector('div[style]')) list.innerHTML='';
+  list.insertAdjacentHTML('beforeend',`
+    <div class="finding-row" id="alert-row-${data.id}">
+      <span>${escHtml(data.name)}</span>
+      <span style="color:var(--tx3);font-size:12px">${cond} · ${thr}</span>
+      <button class="btn btn-danger btn-sm" onclick="deleteAlert(${data.id})">Delete</button>
+    </div>`);
+  document.getElementById('alert-name').value='';
+  document.getElementById('alert-threshold').value='';
+}
+
+async function deleteAlert(id){
+  await fetch('/alerts?id='+id,{method:'DELETE'});
+  document.getElementById('alert-row-'+id)?.remove();
+}
+
+// ── API Key ───────────────────────────────────────────────────────────────────
+function copyKey(){
+  const k = document.getElementById('api-key-display')?.textContent
+         || document.getElementById('settings-api-key')?.textContent || '';
+  navigator.clipboard.writeText(k.trim());
+  alert('API key copied!');
+}
+
+function copyApiEndpoint(){
+  navigator.clipboard.writeText(location.origin+'/api/v1/logs/ingest');
+  alert('API endpoint copied!');
+}
+
+async function rotateKey(){
+  if(!confirm('Rotate API key? All existing integrations will break.')) return;
+  const res  = await fetch('/profile/apikey',{method:'POST'});
+  const data = await res.json();
+  if(document.getElementById('api-key-display'))
+    document.getElementById('api-key-display').textContent = data.api_key;
+  if(document.getElementById('settings-api-key'))
+    document.getElementById('settings-api-key').textContent = data.api_key;
+  alert('API key rotated!');
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function escHtml(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+</script>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Register · ObserveX{% endblock %}
+{% block body %}
+<div style="min-height:100vh;display:grid;place-items:center;background:var(--bg);position:relative;overflow:hidden">
+  <div style="position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(124,58,237,.15) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none"></div>
+
+  <div style="width:100%;max-width:440px;padding:24px">
+    <div style="text-align:center;margin-bottom:28px">
+      <a href="{{ url_for('login') }}" style="display:inline-block">
+        <div style="width:52px;height:52px;border-radius:14px;background:var(--grad);display:inline-grid;place-items:center;font-size:24px;box-shadow:0 12px 36px rgba(90,94,247,.4);margin-bottom:12px">🔭</div>
+      </a>
+      <div style="font-size:22px;font-weight:700;letter-spacing:-.03em">ObserveX</div>
+      <div style="color:var(--tx3);font-size:13px">Start analysing logs in seconds</div>
+    </div>
+
+    <div class="card" style="padding:28px">
+      <h2 style="font-size:18px;font-weight:700;margin-bottom:6px">Create your account</h2>
+      <p style="color:var(--tx2);font-size:13px;margin-bottom:24px">No credit card required</p>
+
+      <form method="POST">
+        <div style="margin-bottom:14px">
+          <label class="lbl">Full name</label>
+          <input class="input" type="text" name="name" placeholder="Ada Lovelace" required>
+        </div>
+        <div style="margin-bottom:14px">
+          <label class="lbl">Work email</label>
+          <input class="input" type="email" name="email" placeholder="you@company.com" required>
+        </div>
+        <div style="margin-bottom:20px">
+          <label class="lbl">Password <span style="color:var(--tx3);font-weight:400;text-transform:none">(min 8 chars)</span></label>
+          <input class="input" type="password" name="password" placeholder="••••••••" minlength="8" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Create account →</button>
+      </form>
+
+      <p style="text-align:center;margin-top:18px;font-size:13px;color:var(--tx2)">
+        Already have an account? <a href="{{ url_for('login') }}">Sign in</a>
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}
