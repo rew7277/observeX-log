@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Shared RCA · ObserveX{% endblock %}
+{% block body %}
+<div style="min-height:100vh;padding:40px 6vw;background:var(--bg)">
+  <div style="max-width:1000px;margin:auto">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px"><div class="brand-logo" style="font-weight:900">OX</div><div><h2>{{ report.title }}</h2><p style="color:var(--tx3);font-size:13px">Masked report · Expires {{ report.expires_at.strftime('%Y-%m-%d %H:%M') }}</p></div></div>
+    <pre class="card mono" style="white-space:pre-wrap;line-height:1.7">{{ report.content }}</pre>
+  </div>
+</div>
+{% endblock %}

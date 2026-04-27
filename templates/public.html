@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}ObserveX · Log Intelligence SaaS{% endblock %}
+{% block body %}
+<div style="min-height:100vh;background:radial-gradient(circle at top left,rgba(90,94,247,.18),transparent 35%),var(--bg);">
+  <header style="display:flex;justify-content:space-between;align-items:center;padding:22px 6vw;border-bottom:1px solid var(--bd);position:sticky;top:0;background:rgba(10,10,18,.82);backdrop-filter:blur(14px);z-index:10">
+    <a href="{{ url_for('index') }}" style="display:flex;align-items:center;gap:12px;color:var(--tx);text-decoration:none"><div class="brand-logo" style="font-weight:900">OX</div><div><b>ObserveX</b><div style="font-size:11px;color:var(--tx3)">Incident intelligence for logs</div></div></a>
+    <nav style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-weight:700;font-size:13px">
+      <a href="{{ url_for('public_features') }}">Features</a><a href="{{ url_for('public_product') }}">Product</a><a href="{{ url_for('public_security') }}">Security</a><a href="{{ url_for('public_pricing') }}">Pricing</a><a class="btn btn-ghost btn-sm" href="{{ url_for('login') }}">Login</a><a class="btn btn-primary btn-sm" href="{{ url_for('register') }}">Start free</a>
+    </nav>
+  </header>
+  <main style="padding:72px 6vw">
+    <section style="max-width:1050px;margin:auto;text-align:center">
+      <div class="badge badge-info">Upload or stream logs → RCA, trace, impact and safe sharing</div>
+      <h1 style="font-size:clamp(38px,7vw,82px);line-height:.95;letter-spacing:-.06em;margin:20px 0;background:var(--grad);-webkit-background-clip:text;color:transparent">Find production issues before customers do.</h1>
+      <p style="font-size:18px;color:var(--tx2);max-width:760px;margin:0 auto 28px">ObserveX converts MuleSoft, JSON, Java, Node, Nginx and cloud logs into incident timelines, dynamic system maps, severity scoring, PII masking and explainable RCA reports.</p>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><a class="btn btn-primary" href="{{ url_for('register') }}">Create workspace</a><a class="btn btn-ghost" href="{{ url_for('login') }}">Open app</a></div>
+    </section>
+    <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:64px auto 0;max-width:1180px">
+      {% for title,desc,icon in [
+        ('Demo incidents','Show value instantly without customer logs.','🧪'),('Onboarding wizard','Upload, S3, API ingestion setup paths.','🧭'),('Queue ingestion','Async jobs for 500MB+ uploads.','⚙️'),('Dynamic system map','APIs, dependencies, errors and latency from real logs.','🔀'),('PII masking','JWT, Aadhaar, PAN, mobile, loan/payment IDs masked.','🛡'),('Explainable RCA','Every recommendation shows supporting logs/traces.','🧠'),('Source health','File/API/S3 ingestion status in one place.','📡'),('Safe sharing','Masked RCA reports with expiring links.','🔗')]
+      %}<div class="card"><div style="font-size:28px">{{icon}}</div><h3>{{title}}</h3><p style="color:var(--tx2);font-size:13px">{{desc}}</p></div>{% endfor %}
+    </section>
+  </main>
+</div>
+{% endblock %}

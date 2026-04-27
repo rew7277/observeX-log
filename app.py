@@ -1,4 +1,4 @@
-import os, re, json, hashlib, secrets, datetime, threading
+import os, re, json, hashlib, secrets, datetime, threading, time
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, jsonify, flash, make_response
@@ -35,6 +35,25 @@ ALLOWED_EXT = {"log", "txt", "json"}
 # Railway volume/persistent storage. Mount a Railway volume and set OBSERVEX_DATA_DIR=/data.
 DATA_DIR = os.environ.get("OBSERVEX_DATA_DIR", "/data")
 UPLOAD_DIR = os.path.join(DATA_DIR, "observex_uploads")
+
+# Optional MongoDB support. Keep empty to use Railway volume + SQLite only.
+# For Railway Basic, prefer MongoDB Atlas over running MongoDB inside the Railway service.
+MONGO_URI = os.environ.get("MONGO_URI", "").strip()
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "observex")
+_mongo_client = None
+
+def get_mongo_db():
+    global _mongo_client
+    if not MONGO_URI:
+        return None
+    try:
+        from pymongo import MongoClient
+        if _mongo_client is None:
+            _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2500)
+        return _mongo_client[MONGO_DB_NAME]
+    except Exception:
+        app.logger.exception("MongoDB is configured but unavailable")
+        return None
 try:
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 except Exception:
@@ -81,6 +100,206 @@ class CustomEnvironment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     __table_args__ = (db.UniqueConstraint("user_id", "name", name="uq_user_environment"),)
 
+class Workspace(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    owner_id   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    name       = db.Column(db.String(120), nullable=False)
+    plan       = db.Column(db.String(40), default="starter")
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class WorkspaceMember(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=False)
+    user_id      = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    role         = db.Column(db.String(30), default="Admin")  # Admin, Developer, Viewer, Auditor
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("workspace_id", "user_id", name="uq_workspace_user"),)
+
+class AuditEvent(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    workspace_id = db.Column(db.Integer, nullable=True)
+    action       = db.Column(db.String(80), nullable=False)
+    target       = db.Column(db.String(200), default="")
+    details      = db.Column(db.Text, default="{}")
+    ip_address   = db.Column(db.String(80), default="")
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class RetentionPolicy(db.Model):
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    days               = db.Column(db.Integer, default=30)
+    masked_only        = db.Column(db.Boolean, default=True)
+    encrypted_raw_logs = db.Column(db.Boolean, default=False)
+    created_at         = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at         = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class AlertDestination(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    kind        = db.Column(db.String(30), default="email")  # email, slack, teams, webhook
+    target      = db.Column(db.String(300), nullable=False)
+    active      = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class SourceConnector(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    kind        = db.Column(db.String(40), nullable=False)  # s3, cloudwatch, mulesoft, kafka, webhook
+    name        = db.Column(db.String(120), nullable=False)
+    config_json = db.Column(db.Text, default="{}")  # store non-secret config only in MVP
+    active      = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+
+class InviteCode(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspace.id"), nullable=False)
+    code         = db.Column(db.String(64), unique=True, nullable=False)
+    role         = db.Column(db.String(30), default="Developer")
+    active       = db.Column(db.Boolean, default=True)
+    created_by   = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class IngestionJob(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    source      = db.Column(db.String(60), default="file")
+    filename    = db.Column(db.String(220), default="")
+    status      = db.Column(db.String(30), default="queued")  # queued, running, success, failed
+    total_bytes = db.Column(db.Integer, default=0)
+    total_lines = db.Column(db.Integer, default=0)
+    error       = db.Column(db.Text, default="")
+    started_at  = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class SharedReport(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    token       = db.Column(db.String(80), unique=True, nullable=False)
+    title       = db.Column(db.String(180), default="ObserveX RCA Report")
+    content     = db.Column(db.Text, default="")
+    expires_at  = db.Column(db.DateTime, nullable=False)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class QueryMetric(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    action      = db.Column(db.String(80), default="search")
+    duration_ms = db.Column(db.Integer, default=0)
+    rows        = db.Column(db.Integer, default=0)
+    bytes       = db.Column(db.Integer, default=0)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+
+def ensure_default_workspace(user):
+    if user is None:
+        return None
+    ws = Workspace.query.filter_by(owner_id=user.id).order_by(Workspace.id.asc()).first()
+    if not ws:
+        ws = Workspace(owner_id=user.id, name=f"{user.name or 'My'} Workspace")
+        db.session.add(ws)
+        db.session.flush()
+        db.session.add(WorkspaceMember(workspace_id=ws.id, user_id=user.id, role="Admin"))
+        db.session.flush()
+    return ws
+
+def get_user_role(user):
+    ws = ensure_default_workspace(user)
+    if not ws:
+        return "Viewer"
+    m = WorkspaceMember.query.filter_by(workspace_id=ws.id, user_id=user.id).first()
+    return m.role if m else "Viewer"
+
+def role_required(*roles):
+    def wrapper(fn):
+        @wraps(fn)
+        def inner(*args, **kwargs):
+            user = get_current_user()
+            if user is None:
+                return jsonify({"error":"Session expired. Please login again."}), 401
+            if get_user_role(user) not in roles:
+                return jsonify({"error":"Not allowed for your role."}), 403
+            return fn(*args, **kwargs)
+        return inner
+    return wrapper
+
+def audit_event(user, action, target="", details=None):
+    if user is None:
+        return
+    try:
+        ws = ensure_default_workspace(user)
+        evt = AuditEvent(
+            user_id=user.id,
+            workspace_id=ws.id if ws else None,
+            action=str(action)[:80],
+            target=str(target or "")[:200],
+            details=json.dumps(details or {}, default=str)[:4000],
+            ip_address=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:80]
+        )
+        db.session.add(evt)
+        mdb = get_mongo_db()
+        if mdb is not None:
+            try:
+                mdb.audit_events.insert_one({
+                    "user_id": user.id,
+                    "workspace_id": ws.id if ws else None,
+                    "action": action,
+                    "target": target,
+                    "details": details or {},
+                    "ip_address": evt.ip_address,
+                    "created_at": datetime.datetime.utcnow()
+                })
+            except Exception:
+                app.logger.exception("Mongo audit mirror failed")
+    except Exception:
+        app.logger.exception("Audit event failed")
+
+def get_retention_policy(user):
+    pol = RetentionPolicy.query.filter_by(user_id=user.id).first()
+    if not pol:
+        pol = RetentionPolicy(user_id=user.id, days=int(os.environ.get("DEFAULT_RETENTION_DAYS", "30")))
+        db.session.add(pol)
+        db.session.flush()
+    return pol
+
+def storage_status(user):
+    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
+    total_bytes = 0
+    file_count = 0
+    if os.path.isdir(user_dir):
+        for name in os.listdir(user_dir):
+            path = os.path.join(user_dir, name)
+            if os.path.isfile(path):
+                file_count += 1
+                total_bytes += os.path.getsize(path)
+    sessions = LogSession.query.filter_by(user_id=user.id).count()
+    return {
+        "backend": "railway-volume",
+        "path": UPLOAD_DIR,
+        "stored_files": file_count,
+        "bytes": total_bytes,
+        "mb": round(total_bytes/1024/1024, 2),
+        "sessions": sessions,
+        "mongo_configured": bool(MONGO_URI),
+        "max_upload_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
+    }
+
+def apply_retention_for_user(user):
+    pol = get_retention_policy(user)
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=max(1, int(pol.days or 30)))
+    old = LogSession.query.filter(LogSession.user_id == user.id, LogSession.created_at < cutoff).all()
+    deleted = 0
+    for item in old:
+        delete_persisted_upload(user.id, item.id)
+        db.session.delete(item)
+        deleted += 1
+    audit_event(user, "retention.apply", "LogSession", {"deleted_sessions": deleted, "days": pol.days})
+    db.session.commit()
+    return deleted
+
+
 _db_init_lock = threading.Lock()
 
 def init_db_once():
@@ -124,6 +343,45 @@ def get_current_user():
     return user
 
 DEFAULT_ENVIRONMENTS = ["PROD", "UAT", "SIT", "DEV", "PREPROD", "DR"]
+
+PLAN_LIMITS = {
+    "starter": {"storage_gb": 1, "ingestion_gb_month": 2, "users": 3, "retention_days": 7, "alerts": 3},
+    "growth": {"storage_gb": 10, "ingestion_gb_month": 50, "users": 25, "retention_days": 30, "alerts": 25},
+    "business": {"storage_gb": 100, "ingestion_gb_month": 500, "users": 100, "retention_days": 90, "alerts": 100},
+    "enterprise": {"storage_gb": 1000, "ingestion_gb_month": 5000, "users": 1000, "retention_days": 365, "alerts": 1000},
+}
+
+def get_plan_limits(plan):
+    return PLAN_LIMITS.get((plan or "starter").lower(), PLAN_LIMITS["starter"])
+
+def schema_detection_sample(raw):
+    low=(raw or "")[:20000].lower()
+    if "muleruntime" in low or "loggermessageprocessor" in low: return "MuleSoft"
+    if "cloudwatch" in low or "@timestamp" in low: return "AWS CloudWatch / JSON"
+    if re.search(r'\b(GET|POST|PUT|DELETE)\s+/.*HTTP/', raw or ""): return "Nginx/Apache Access"
+    if "exception in thread" in low or "java.lang" in low: return "Java"
+    if "node.js" in low or "express" in low: return "Node.js"
+    if (raw or "").lstrip().startswith(('{','[')): return "JSON"
+    return "Generic text logs"
+
+def incident_severity_score(result):
+    total=max(1, int(result.get("total") or 0))
+    error_rate=(int(result.get("errors") or 0)/total)*100
+    warn_rate=(int(result.get("warns") or 0)/total)*100
+    p95=int(result.get("p95") or 0)
+    apps=len(result.get("apps") or [])
+    impact=min(30, apps*5)
+    score=min(100, round(error_rate*4 + warn_rate*1.5 + (25 if p95>3000 else 0) + impact))
+    label="critical" if score>=75 else "high" if score>=50 else "medium" if score>=25 else "low"
+    return {"score": score, "label": label, "why": [f"error rate {round(error_rate,2)}%", f"warn rate {round(warn_rate,2)}%", f"p95 latency {p95}ms", f"apps impacted {apps}"]}
+
+def explain_rca(result):
+    evidence=[]
+    if result.get("top_errors"): evidence.append({"reason":"Repeated error cluster", "evidence": result["top_errors"][:3]})
+    if result.get("hot_traces"): evidence.append({"reason":"Highest-signal trace/event", "evidence": result["hot_traces"][:2]})
+    if result.get("dependencies"): evidence.append({"reason":"Dependency signals found in logs", "evidence": result["dependencies"][:5]})
+    if result.get("timeline_buckets"): evidence.append({"reason":"Timeline buckets used for spike context", "evidence": result["timeline_buckets"][-5:]})
+    return evidence or [{"reason":"No strong RCA evidence yet", "evidence":["Upload more logs or broaden date/search filters."]}]
 
 def get_user_environments(user):
     custom = []
@@ -538,7 +796,11 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         {"title":"Deploy readiness", "value": f"Health {round(score)}/100", "type":"critical" if error_rate>5 else ("warn" if warn_rate>10 or p95>3000 else "ok")},
     ]
     deploy_summary={"errors_delta":"baseline needed","latency_delta":"baseline needed","health_score":round(score),"recommendation":"Block release until critical errors are explained." if errors and round(score)<70 else "Safe to continue with monitoring."}
+    schema_type = schema_detection_sample(raw)
+    severity = incident_severity_score({"total": total, "errors": len(errors), "warns": len(warns), "p95": p95, "apps": apps})
+    rca_explain = explain_rca({"top_errors": top_errors, "hot_traces": hot_traces, "dependencies": deps, "timeline_buckets": timeline_buckets})
     return {
+        "schema_type": schema_type, "severity": severity, "rca_explain": rca_explain,
         "environment": detected_env, "total": total, "original_total": len(all_rows), "physical_lines": len(raw.splitlines()), "errors": len(errors), "warns": len(warns),
         "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
         "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
@@ -571,9 +833,23 @@ def send_reset_email(user):
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    if get_current_user() is not None:
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return render_template("public.html", page="home")
+
+@app.route("/features")
+def public_features():
+    return render_template("public.html", page="features")
+
+@app.route("/pricing")
+def public_pricing():
+    return render_template("public.html", page="pricing")
+
+@app.route("/security")
+def public_security():
+    return render_template("public.html", page="security")
+
+@app.route("/product")
+def public_product():
+    return render_template("public.html", page="product")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -594,6 +870,8 @@ def register():
         name  = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
         pwd   = request.form.get("password", "")
+        workspace_name = request.form.get("workspace_name", "").strip()
+        invite_code = request.form.get("invite_code", "").strip()
         if User.query.filter_by(email=email).first():
             flash("Email already registered.", "error")
         elif len(pwd) < 8:
@@ -602,6 +880,14 @@ def register():
             user = User(name=name, email=email,
                         password_hash=generate_password_hash(pwd))
             db.session.add(user)
+            db.session.flush()
+            invite = InviteCode.query.filter_by(code=invite_code, active=True).first() if invite_code else None
+            if invite:
+                db.session.add(WorkspaceMember(workspace_id=invite.workspace_id, user_id=user.id, role=invite.role))
+            else:
+                ws = Workspace(owner_id=user.id, name=workspace_name or f"{name or 'My'} Workspace")
+                db.session.add(ws); db.session.flush()
+                db.session.add(WorkspaceMember(workspace_id=ws.id, user_id=user.id, role="Admin"))
             db.session.commit()
             session["user_id"]   = user.id
             session["user_name"] = user.name
@@ -650,10 +936,51 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    return render_app_page("dashboard")
+
+def render_app_page(active="dashboard"):
     user = get_current_user()
-    recent = LogSession.query.filter_by(user_id=user.id)                             .order_by(LogSession.created_at.desc()).limit(10).all()
+    recent = LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).limit(10).all()
     alerts = AlertRule.query.filter_by(user_id=user.id).all()
-    return render_template("dashboard.html", user=user, recent=recent, alerts=alerts, environments=get_user_environments(user))
+    ws = ensure_default_workspace(user)
+    role = get_user_role(user)
+    return render_template("dashboard.html", user=user, recent=recent, alerts=alerts, environments=get_user_environments(user), workspace=ws, role=role, limits=get_plan_limits(ws.plan if ws else "starter"), active_section=active)
+
+@app.route("/log-search")
+@login_required
+def page_log_search(): return render_app_page("logs")
+
+@app.route("/system-map")
+@login_required
+def page_system_map(): return render_app_page("flow")
+
+@app.route("/change-impact")
+@login_required
+def page_change_impact(): return render_app_page("compare")
+
+@app.route("/api-ingestion")
+@login_required
+def page_api_ingestion(): return render_app_page("api")
+
+@app.route("/alerts-page")
+@login_required
+def page_alerts(): return render_app_page("alerts")
+
+@app.route("/connectors-page")
+@login_required
+def page_connectors(): return render_app_page("connectors")
+
+@app.route("/compliance-page")
+@login_required
+def page_compliance(): return render_app_page("compliance")
+
+@app.route("/upload-history")
+@login_required
+def page_upload_history(): return render_app_page("history")
+
+@app.route("/settings-page")
+@login_required
+def page_settings(): return render_app_page("settings")
 
 # ── Log analysis ──────────────────────────────────────────────────────────────
 @app.route("/analyse", methods=["POST"])
@@ -687,7 +1014,9 @@ def analyse():
         if not raw:
             return jsonify({"error": "No log content provided"}), 400
 
+        start_ms = time.time()
         result = analyse_log_text(raw, query, env, fname)
+        result["source_health"] = {"file_upload":"active", "api_ingestion":"available", "s3":"not_connected", "last_ingest":"now"}
         user = get_current_user()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
@@ -701,6 +1030,10 @@ def analyse():
             persist_raw_upload(user.id, ls.id, fname, raw)
         except Exception:
             app.logger.exception("Could not persist upload to volume")
+        duration_ms = int((time.time()-start_ms)*1000)
+        db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
+        audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
+        db.session.commit()
         result["session_id"] = ls.id
         result["stored"] = True
         return jsonify(result)
@@ -745,6 +1078,8 @@ def api_ingest():
         persist_raw_upload(user.id, ls.id, app_n, raw)
     except Exception:
         app.logger.exception("Could not persist API ingestion to volume")
+    audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors")})
+    db.session.commit()
     return jsonify({"status": "ok", "session_id": ls.id, "stored": True, **result})
 
 # ── Alert rules ───────────────────────────────────────────────────────────────
@@ -793,6 +1128,7 @@ def history():
             for item in q.all():
                 delete_persisted_upload(uid, item.id)
                 db.session.delete(item)
+        audit_event(user, 'logs.delete', sid or 'all', {'scope':'history_delete'})
         db.session.commit()
         return jsonify({'status':'deleted'})
     sessions = LogSession.query.filter_by(user_id=uid)\
@@ -817,6 +1153,8 @@ def export_csv():
     resp = make_response(output)
     resp.headers["Content-Type"] = "text/csv"
     resp.headers["Content-Disposition"] = "attachment; filename=observex-log-export.csv"
+    audit_event(get_current_user(), "logs.export_csv", "visible_rows", {"rows": len(rows)})
+    db.session.commit()
     return resp
 
 @app.route("/assistant/suggest", methods=["POST"])
@@ -847,6 +1185,8 @@ def settings_environments():
     if user is None:
         return jsonify({"error": "Session expired. Please login again."}), 401
     if request.method == "POST":
+        if get_user_role(user) != "Admin":
+            return jsonify({"error":"Only Admin can manage environments"}), 403
         data = request.get_json(force=True, silent=True) or {}
         name = re.sub(r"[^A-Za-z0-9_-]", "", (data.get("name") or "").upper())[:40]
         if not name:
@@ -857,6 +1197,8 @@ def settings_environments():
             db.session.commit()
         return jsonify({"environments": get_user_environments(user)})
     if request.method == "DELETE":
+        if get_user_role(user) != "Admin":
+            return jsonify({"error":"Only Admin can manage environments"}), 403
         name = re.sub(r"[^A-Za-z0-9_-]", "", (request.args.get("name") or "").upper())[:40]
         env = CustomEnvironment.query.filter_by(user_id=user.id, name=name).first()
         if env:
@@ -866,6 +1208,164 @@ def settings_environments():
     return jsonify({"environments": get_user_environments(user), "defaults": DEFAULT_ENVIRONMENTS})
 
 
+@app.route("/settings/saas", methods=["GET", "POST"])
+@login_required
+def settings_saas():
+    user = get_current_user()
+    ws = ensure_default_workspace(user)
+    pol = get_retention_policy(user)
+    if request.method == "POST":
+        if get_user_role(user) != "Admin":
+            return jsonify({"error":"Only Admin can update workspace SaaS settings"}), 403
+        data = request.get_json(force=True, silent=True) or {}
+        if data.get("workspace_name"):
+            ws.name = str(data.get("workspace_name"))[:120]
+        if data.get("plan"):
+            ws.plan = str(data.get("plan"))[:40]
+        if data.get("retention_days") is not None:
+            pol.days = max(1, min(3650, int(data.get("retention_days") or 30)))
+        pol.masked_only = bool(data.get("masked_only", True))
+        pol.encrypted_raw_logs = bool(data.get("encrypted_raw_logs", False))
+        pol.updated_at = datetime.datetime.utcnow()
+        audit_event(user, "settings.saas_update", ws.name, {"retention_days": pol.days, "masked_only": pol.masked_only})
+        db.session.commit()
+    members = WorkspaceMember.query.filter_by(workspace_id=ws.id).all()
+    return jsonify({
+        "workspace": {"id": ws.id, "name": ws.name, "plan": ws.plan},
+        "role": get_user_role(user),
+        "members": [{"user_id": m.user_id, "role": m.role} for m in members],
+        "retention": {"days": pol.days, "masked_only": pol.masked_only, "encrypted_raw_logs": pol.encrypted_raw_logs},
+        "storage": storage_status(user),
+        "recommendation": "Railway volume is fine for MVP. Use MongoDB Atlas for metadata/audit/search-light workloads. For heavy log search at scale, later add ClickHouse or OpenSearch."
+    })
+
+@app.route("/audit", methods=["GET"])
+@login_required
+def audit_events():
+    user = get_current_user()
+    rows = AuditEvent.query.filter_by(user_id=user.id).order_by(AuditEvent.created_at.desc()).limit(100).all()
+    return jsonify([{
+        "id": r.id, "action": r.action, "target": r.target, "details": json.loads(r.details or "{}"),
+        "ip": r.ip_address, "at": r.created_at.strftime("%Y-%m-%d %H:%M:%S")
+    } for r in rows])
+
+@app.route("/retention/apply", methods=["POST"])
+@login_required
+def retention_apply():
+    user = get_current_user()
+    deleted = apply_retention_for_user(user)
+    return jsonify({"status":"ok", "deleted_sessions": deleted})
+
+@app.route("/usage", methods=["GET"])
+@login_required
+def usage():
+    return jsonify(storage_status(get_current_user()))
+
+@app.route("/connectors", methods=["GET", "POST", "DELETE"])
+@login_required
+def connectors():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        c = SourceConnector(
+            user_id=user.id,
+            kind=str(data.get("kind") or "webhook")[:40],
+            name=str(data.get("name") or "Connector")[:120],
+            config_json=json.dumps(data.get("config") or {})[:4000],
+        )
+        db.session.add(c)
+        audit_event(user, "connector.create", c.name, {"kind": c.kind})
+        db.session.commit()
+        return jsonify({"id": c.id, "status":"created"})
+    if request.method == "DELETE":
+        cid = request.args.get("id")
+        c = SourceConnector.query.filter_by(user_id=user.id, id=cid).first()
+        if c:
+            audit_event(user, "connector.delete", c.name, {"kind": c.kind})
+            db.session.delete(c)
+            db.session.commit()
+        return jsonify({"status":"deleted"})
+    rows = SourceConnector.query.filter_by(user_id=user.id).order_by(SourceConnector.created_at.desc()).all()
+    return jsonify([{
+        "id": c.id, "kind": c.kind, "name": c.name, "active": c.active,
+        "config": json.loads(c.config_json or "{}"), "at": c.created_at.strftime("%Y-%m-%d %H:%M")
+    } for c in rows])
+
+@app.route("/alert-destinations", methods=["GET", "POST", "DELETE"])
+@login_required
+def alert_destinations():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        d = AlertDestination(user_id=user.id, kind=str(data.get("kind") or "email")[:30], target=str(data.get("target") or "")[:300])
+        if not d.target:
+            return jsonify({"error":"target is required"}), 400
+        db.session.add(d)
+        audit_event(user, "alert_destination.create", d.target, {"kind": d.kind})
+        db.session.commit()
+        return jsonify({"id": d.id, "status":"created"})
+    if request.method == "DELETE":
+        did = request.args.get("id")
+        d = AlertDestination.query.filter_by(user_id=user.id, id=did).first()
+        if d:
+            audit_event(user, "alert_destination.delete", d.target, {"kind": d.kind})
+            db.session.delete(d)
+            db.session.commit()
+        return jsonify({"status":"deleted"})
+    rows = AlertDestination.query.filter_by(user_id=user.id).order_by(AlertDestination.created_at.desc()).all()
+    return jsonify([{"id": d.id, "kind": d.kind, "target": d.target, "active": d.active, "at": d.created_at.strftime("%Y-%m-%d %H:%M")} for d in rows])
+
+@app.route("/api/v1/logs/search", methods=["GET"])
+def api_logs_search():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error":"Missing token"}), 401
+    user = User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    if not user:
+        return jsonify({"error":"Invalid API key"}), 401
+    q = request.args.get("q", "")
+    env = request.args.get("environment", "PROD")
+    limit = min(1000, int(request.args.get("limit", "200") or 200))
+    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
+    raw = ""
+    if os.path.isdir(user_dir):
+        for name in sorted(os.listdir(user_dir))[-10:]:
+            if name.endswith(".masked.log"):
+                try:
+                    raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
+                except Exception:
+                    pass
+    result = analyse_log_text(raw, q, env, "api-search") if raw else {"log_rows": [], "total": 0}
+    audit_event(user, "logs.api_search", q, {"limit": limit})
+    db.session.commit()
+    return jsonify({"total": result.get("total",0), "rows": result.get("log_rows",[])[:limit]})
+
+@app.route("/api/v1/trace/<trace_id>", methods=["GET"])
+def api_trace_lookup(trace_id):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error":"Missing token"}), 401
+    user = User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    if not user:
+        return jsonify({"error":"Invalid API key"}), 401
+    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
+    raw = ""
+    if os.path.isdir(user_dir):
+        for name in sorted(os.listdir(user_dir))[-10:]:
+            if name.endswith(".masked.log"):
+                try:
+                    raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
+                except Exception:
+                    pass
+    rows = []
+    if raw:
+        result = analyse_log_text(raw, f"trace:{trace_id}", request.args.get("environment", "PROD"), "api-trace")
+        rows = result.get("log_rows", [])
+    audit_event(user, "trace.lookup", trace_id, {"rows": len(rows)})
+    db.session.commit()
+    return jsonify({"trace_id": trace_id, "rows": rows})
+
+
 @app.route("/api/docs")
 @login_required
 def api_docs():
@@ -873,23 +1373,168 @@ def api_docs():
     return jsonify({
         "auth": "Authorization: Bearer <api_key>",
         "base_url": request.host_url.rstrip("/"),
-        "ingest": {
-            "method": "POST",
-            "path": "/api/v1/logs/ingest",
-            "request": {
-                "environment": "PROD",
-                "application": "s-paymentengine-api",
-                "logs": "INFO 2026-04-25 14:51:17 ..."
+        "storage_options": {
+            "current": "Railway Volume + SQLite metadata",
+            "railway_basic_recommendation": "Use Railway volume for masked raw files and SQLite for MVP metadata. Use MongoDB Atlas free/shared tier for audit events and searchable metadata if you cannot use Postgres yet.",
+            "mongodb": {"env": ["MONGO_URI", "MONGO_DB_NAME"], "best_for": "audit events, connector configs, investigation documents, lightweight metadata", "not_best_for": "very large full-text log search at enterprise scale"},
+            "future_scale": "S3/object storage for raw logs + Postgres metadata + ClickHouse/OpenSearch for high-speed search"
+        },
+        "endpoints": {
+            "ingest": {
+                "method": "POST", "path": "/api/v1/logs/ingest",
+                "request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":"INFO 2026-04-25 14:51:17 ..."},
+                "success_response": {"status":"ok", "session_id":123, "stored": True, "errors":0, "warns":0},
+                "failure_responses": {"401":"Missing/invalid API key", "400":"logs field required", "413":"payload exceeds MAX_UPLOAD_MB"}
             },
-            "success_response": {"status":"ok", "session_id":123, "stored": True, "errors":0, "warns":0},
-            "failure_responses": {"401":"Missing/invalid API key", "400":"logs field required", "413":"payload exceeds MAX_UPLOAD_MB"},
-            "notes": [
-                "Logs are masked for JWT, tokens, PAN, Aadhaar, mobile, customer names, loan/account/payment identifiers before returning to UI.",
-                "Set OBSERVEX_DATA_DIR=/data when using Railway Volume to persist masked uploads.",
-                "For 500MB+ production ingestion, prefer direct API/S3 streaming over browser upload."
-            ]
-        }
+            "search": {"method":"GET", "path":"/api/v1/logs/search?q=level:ERROR&limit=200", "purpose":"Search recently persisted masked logs"},
+            "trace": {"method":"GET", "path":"/api/v1/trace/<trace_id>", "purpose":"Return grouped trace/event timeline from persisted masked logs"},
+            "connectors": {"method":"GET/POST/DELETE", "path":"/connectors", "types":["s3","cloudwatch","mulesoft","kafka","webhook"]},
+            "alert_destinations": {"method":"GET/POST/DELETE", "path":"/alert-destinations", "types":["email","slack","teams","webhook"]},
+            "audit": {"method":"GET", "path":"/audit"},
+            "retention": {"method":"POST", "path":"/retention/apply"}
+        },
+        "security": [
+            "JWT, bearer tokens, API keys, Aadhaar, PAN, mobile, email, customer names and loan/account/payment identifiers are masked before UI/export/storage.",
+            "Audit logs track upload, delete, export, connector, settings and trace lookup actions.",
+            "Retention policy can auto-remove old sessions and volume files."
+        ]
     })
+
+
+@app.route("/demo/load", methods=["POST"])
+@login_required
+def demo_load():
+    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-payment-api].post:\payment:application\json:demo-config.CPU_LITE] [processor: payment-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before payment log {"amount":1200,"paymentStatus":"Success","customerMobile":"9876543210","loanNumber":"FS123456789"}
+ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-payment-api].post:\payment:application\json:demo-config.CPU_LITE] [processor: payment-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling settlement service duration=3350
+WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
+INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200
+"""
+    result = analyse_log_text(sample, "", "DEMO", "demo-incident.log")
+    result["demo"] = True
+    return jsonify(result)
+
+@app.route("/onboarding/status")
+@login_required
+def onboarding_status():
+    user=get_current_user(); ws=ensure_default_workspace(user)
+    sessions=LogSession.query.filter_by(user_id=user.id).count()
+    connectors_count=SourceConnector.query.filter_by(user_id=user.id).count()
+    return jsonify({
+        "steps":[
+            {"name":"Create workspace", "done": bool(ws)},
+            {"name":"Upload logs or load demo", "done": sessions>0},
+            {"name":"Create API key", "done": bool(user.api_key)},
+            {"name":"Connect source", "done": connectors_count>0},
+            {"name":"Add alert destination", "done": AlertDestination.query.filter_by(user_id=user.id).count()>0},
+        ]
+    })
+
+@app.route("/data-source-health")
+@login_required
+def data_source_health():
+    user=get_current_user()
+    latest=LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).first()
+    connectors=SourceConnector.query.filter_by(user_id=user.id).all()
+    return jsonify({
+        "file_upload": {"status":"active" if latest else "waiting", "last_seen": latest.created_at.strftime("%Y-%m-%d %H:%M") if latest else None},
+        "api_ingestion": {"status":"ready", "endpoint":"/api/v1/logs/ingest"},
+        "s3": {"status":"active" if any(c.kind=='s3' and c.active for c in connectors) else "not_connected"},
+        "connectors": [{"name":c.name,"kind":c.kind,"status":"active" if c.active else "disabled"} for c in connectors]
+    })
+
+@app.route("/performance")
+@login_required
+def performance():
+    user=get_current_user()
+    rows=QueryMetric.query.filter_by(user_id=user.id).order_by(QueryMetric.created_at.desc()).limit(100).all()
+    return jsonify({"metrics":[{"action":r.action,"duration_ms":r.duration_ms,"rows":r.rows,"bytes":r.bytes,"at":r.created_at.strftime("%Y-%m-%d %H:%M:%S")} for r in rows]})
+
+@app.route("/limits")
+@login_required
+def limits():
+    user=get_current_user(); ws=ensure_default_workspace(user); st=storage_status(user); lim=get_plan_limits(ws.plan)
+    return jsonify({"plan": ws.plan, "limits": lim, "usage": st})
+
+@app.route("/workspace/invites", methods=["GET","POST","DELETE"])
+@login_required
+def workspace_invites():
+    user=get_current_user(); ws=ensure_default_workspace(user)
+    if get_user_role(user)!="Admin": return jsonify({"error":"Only Admin can manage invites"}),403
+    if request.method=="POST":
+        data=request.get_json(force=True, silent=True) or {}; role=data.get("role","Developer")
+        if role not in {"Admin","Developer","Viewer","Auditor"}: role="Developer"
+        inv=InviteCode(workspace_id=ws.id, code=secrets.token_urlsafe(12), role=role, created_by=user.id)
+        db.session.add(inv); audit_event(user,"invite.create",role,{"code":inv.code}); db.session.commit()
+        return jsonify({"code":inv.code,"role":inv.role})
+    if request.method=="DELETE":
+        code=request.args.get("code"); inv=InviteCode.query.filter_by(workspace_id=ws.id, code=code).first()
+        if inv: inv.active=False; audit_event(user,"invite.disable",code,{}); db.session.commit()
+        return jsonify({"status":"disabled"})
+    invs=InviteCode.query.filter_by(workspace_id=ws.id).order_by(InviteCode.created_at.desc()).all()
+    return jsonify([{"code":i.code,"role":i.role,"active":i.active,"at":i.created_at.strftime("%Y-%m-%d %H:%M")} for i in invs])
+
+@app.route("/workspace/members", methods=["GET","POST","DELETE"])
+@login_required
+def workspace_members():
+    user=get_current_user(); ws=ensure_default_workspace(user)
+    if request.method!="GET" and get_user_role(user)!="Admin": return jsonify({"error":"Only Admin can manage members"}),403
+    if request.method=="POST":
+        data=request.get_json(force=True, silent=True) or {}; uid=int(data.get("user_id") or 0); role=data.get("role","Viewer")
+        m=WorkspaceMember.query.filter_by(workspace_id=ws.id,user_id=uid).first()
+        if m and role in {"Admin","Developer","Viewer","Auditor"}: m.role=role; audit_event(user,"member.role_update",uid,{"role":role}); db.session.commit()
+        return jsonify({"status":"updated"})
+    if request.method=="DELETE":
+        uid=int(request.args.get("user_id") or 0); m=WorkspaceMember.query.filter_by(workspace_id=ws.id,user_id=uid).first()
+        if m and uid!=ws.owner_id: db.session.delete(m); audit_event(user,"member.remove",uid,{}); db.session.commit()
+        return jsonify({"status":"removed"})
+    members=WorkspaceMember.query.filter_by(workspace_id=ws.id).all()
+    out=[]
+    for m in members:
+        u=db.session.get(User,m.user_id); out.append({"user_id":m.user_id,"name":u.name if u else "Unknown","email":u.email if u else "", "role":m.role})
+    return jsonify(out)
+
+@app.route("/reports/share", methods=["POST"])
+@login_required
+def share_report():
+    user=get_current_user(); data=request.get_json(force=True, silent=True) or {}
+    token=secrets.token_urlsafe(24)
+    rep=SharedReport(user_id=user.id, token=token, title=str(data.get("title") or "ObserveX RCA Report")[:180], content=mask_secrets(str(data.get("content") or ""))[:200000], expires_at=datetime.datetime.utcnow()+datetime.timedelta(days=int(data.get("days") or 7)))
+    db.session.add(rep); audit_event(user,"report.share",rep.title,{"expires_at":rep.expires_at}); db.session.commit()
+    return jsonify({"url":url_for("view_shared_report", token=token, _external=True), "expires_at":rep.expires_at.strftime("%Y-%m-%d %H:%M")})
+
+@app.route("/r/<token>")
+def view_shared_report(token):
+    rep=SharedReport.query.filter_by(token=token).first()
+    if not rep or rep.expires_at < datetime.datetime.utcnow(): return "Report expired or not found", 404
+    return render_template("shared_report.html", report=rep)
+
+@app.route("/api/v1/logs/ingest-async", methods=["POST"])
+def api_ingest_async():
+    auth=request.headers.get("Authorization","")
+    if not auth.startswith("Bearer "): return jsonify({"error":"Missing token"}),401
+    user=User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    if not user: return jsonify({"error":"Invalid API key"}),401
+    data=request.get_json(force=True, silent=True) or {}; raw=data.get("logs",""); app_n=data.get("application","api-source")
+    job=IngestionJob(user_id=user.id, source="api", filename=app_n, total_bytes=len(raw.encode("utf-8", errors="ignore")), status="queued")
+    db.session.add(job); db.session.commit()
+    def run_job(app_obj, jid, uid, raw_text, env, appname):
+        with app_obj.app_context():
+            j=db.session.get(IngestionJob,jid); j.status="running"; j.started_at=datetime.datetime.utcnow(); db.session.commit()
+            try:
+                u=db.session.get(User,uid); res=analyse_log_text(raw_text,"",env,appname)
+                ls=LogSession(user_id=uid, environment=env, filename=appname,total_lines=res["total"], error_count=res["errors"], warn_count=res["warns"], avg_latency=res["latency"], apps_found=",".join(res["apps"]))
+                db.session.add(ls); db.session.commit(); persist_raw_upload(uid,ls.id,appname,raw_text)
+                j.status="success"; j.total_lines=res["total"]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
+            except Exception as e:
+                j.status="failed"; j.error=str(e)[:2000]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
+    threading.Thread(target=run_job, args=(app,job.id,user.id,raw,data.get("environment","PROD"),app_n), daemon=True).start()
+    return jsonify({"status":"queued","job_id":job.id})
+
+@app.route("/ingestion/jobs")
+@login_required
+def ingestion_jobs():
+    user=get_current_user(); jobs=IngestionJob.query.filter_by(user_id=user.id).order_by(IngestionJob.created_at.desc()).limit(50).all()
+    return jsonify([{"id":j.id,"source":j.source,"file":j.filename,"status":j.status,"bytes":j.total_bytes,"lines":j.total_lines,"error":j.error,"created_at":j.created_at.strftime("%Y-%m-%d %H:%M:%S"),"finished_at":j.finished_at.strftime("%Y-%m-%d %H:%M:%S") if j.finished_at else None} for j in jobs])
 
 # ── Profile / API key ─────────────────────────────────────────────────────────
 @app.route("/profile/apikey", methods=["POST"])

@@ -173,3 +173,88 @@ Before logs are displayed, exported, stored in the Railway volume, or returned b
 - Payment IDs, BBPS IDs, UPI/VPA, receipt IDs and transaction IDs
 
 For enterprise SaaS, keep masked storage as the default and add encrypted raw retention only as an admin-controlled option.
+
+
+## ObserveX v6 SaaS-ready additions
+
+### Storage on Railway Basic
+Current default:
+- Railway Volume mounted at `/data`
+- SQLite metadata database
+- Masked raw logs stored under `OBSERVEX_DATA_DIR=/data`
+
+Recommended Railway variables:
+```bash
+OBSERVEX_DATA_DIR=/data
+MAX_UPLOAD_MB=500
+DEFAULT_RETENTION_DAYS=30
+```
+
+### Can we use MongoDB?
+Yes. For Railway Basic, do **not** run MongoDB inside the same small Railway service. Prefer **MongoDB Atlas free/shared tier** and connect using:
+```bash
+MONGO_URI=mongodb+srv://<user>:<password>@<cluster>/<db>?retryWrites=true&w=majority
+MONGO_DB_NAME=observex
+```
+
+Current MongoDB usage is optional and safe:
+- Mirrors audit events when configured
+- Future-ready for investigation documents, connector configs, saved RCA reports, and lightweight searchable metadata
+
+For very large enterprise log search, later add:
+- Object storage/S3 for raw logs
+- Postgres for tenant/user/billing metadata
+- ClickHouse or OpenSearch for fast indexed log search
+
+### New SaaS features added
+- Workspace model with role foundation: Admin, Developer, Viewer, Auditor
+- Tenant/user scoped data isolation
+- Retention policy with cleanup endpoint
+- Audit trail for uploads, deletes, exports, connector changes, settings changes, API search, and trace lookup
+- Alert destinations: email, Slack, Teams, webhook
+- Source connectors: S3, CloudWatch, MuleSoft, Kafka, webhook
+- Usage/cost visibility: stored file count, volume MB, sessions, max upload size
+- Compliance screen
+- Optional MongoDB audit mirror
+- API search endpoint: `GET /api/v1/logs/search`
+- API trace endpoint: `GET /api/v1/trace/<trace_id>`
+
+### Security
+ObserveX masks JWTs, bearer tokens, API keys, Aadhaar, PAN, mobile numbers, emails, customer names, loan/account/customer/payment IDs, UPI/VPA, BBPS/payment identifiers and other common secrets before UI display, CSV export, volume storage, and API response.
+
+## v7 SaaS/Product Reliability Upgrade
+
+Added on top of v6:
+
+- Public website pages: `/`, `/features`, `/product`, `/security`, `/pricing`
+- Separate authenticated app endpoints: `/dashboard`, `/log-search`, `/system-map`, `/change-impact`, `/api-ingestion`, `/alerts-page`, `/connectors-page`, `/compliance-page`, `/upload-history`, `/settings-page`
+- Demo mode: `/demo/load`
+- Onboarding wizard: `/onboarding/status`
+- Plan/limits API: `/limits`
+- Data source health: `/data-source-health`
+- Queue-style async ingestion: `POST /api/v1/logs/ingest-async` and `/ingestion/jobs`
+- Query/upload performance metrics: `/performance`
+- Incident severity score and schema detection returned in every analysis response
+- Explainable RCA evidence: top errors, hot traces, dependency signals and timeline buckets
+- Customer-safe masked report sharing: `POST /reports/share` and public `/r/<token>`
+- Workspace invite codes and role-based access helpers: `/workspace/invites`, `/workspace/members`
+- Settings now shows current plan, role, workspace and plan limits
+- Login/register branding updated to ObserveX `OX`
+
+### Railway Basic storage recommendation
+
+Keep the current Railway Volume setup for the MVP:
+
+```bash
+OBSERVEX_DATA_DIR=/data
+MAX_UPLOAD_MB=500
+```
+
+For metadata/audit/report storage without Postgres, use MongoDB Atlas:
+
+```bash
+MONGO_URI=mongodb+srv://...
+MONGO_DB_NAME=observex
+```
+
+MongoDB is optional. If `MONGO_URI` is missing, the app still works using SQLite + Railway Volume. For larger enterprise search, later add ClickHouse or OpenSearch.
