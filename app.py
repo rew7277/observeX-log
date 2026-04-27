@@ -17,7 +17,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "sqlite:///observex.db"
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024  # default 100 MB
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
 
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -367,13 +367,41 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         ], msg, "General error")
         top_errors[key]=top_errors.get(key,0)+1
     top_errors=sorted(top_errors.items(), key=lambda x:x[1], reverse=True)[:10]
-    tag_rules={
-        'JWT / Token': r'jwt|token', 'Salesforce': r'salesforce|sfdc', '.NET PDF': r'\.net pdf|pdf api|htmltopdf',
-        'Google SecOps': r'googlesecops|google secops', 'OTP / Gupshup': r'otp|gupshup|sms',
-        'Slow API': r'latency|duration|timeTaken|slow|timeout', 'External Dependency': r'salesforce|gupshup|\.net|google'
-    }
-    smart_tags=[name for name,pat in tag_rules.items() if re.search(pat, joined, re.I)]
-    deps=[name for name,pat in {'Salesforce':r'salesforce|sfdc','.NET PDF API':r'\.net pdf|pdf api','Google SecOps':r'googlesecops|google secops','Gupshup':r'gupshup|otp|sms'}.items() if re.search(pat, raw, re.I)]
+    dynamic_tags=set()
+    # Build tags from the actual uploaded/ingested logs. No customer-specific hardcoding.
+    for r in rows:
+        msg=(r.get('message') or '').lower()
+        flow=(r.get('flow') or '').lower()
+        app=(r.get('app') or '').lower()
+        if 'jwt' in msg or 'token' in msg: dynamic_tags.add('JWT / Token')
+        if 'success' in msg or r.get('level') == 'SUCCESS' or str(r.get('status','')).startswith('2'): dynamic_tags.add('Success')
+        if 'fail' in msg or r.get('level') in {'ERROR','FAILURE'}: dynamic_tags.add('Failure')
+        if r.get('latency',0) > 3000 or 'timeout' in msg or 'slow' in msg: dynamic_tags.add('Slow API')
+        for token in re.findall(r'\b(get|post|put|delete):\\?([a-zA-Z0-9_\-/]+)', r.get('message',''), re.I):
+            path=token[1].strip('\\/')
+            if path: dynamic_tags.add(path.split('/')[0].replace('-', ' ').title() + ' API')
+        for word in re.findall(r'\b[A-Za-z][A-Za-z0-9_-]{2,}\b', flow + ' ' + app):
+            wl=word.lower()
+            if wl not in {'api','subflow','processors','processor','flow','config','cpu','lite','blocking','main','impl'} and len(word) > 3:
+                dynamic_tags.add(word.replace('-', ' ').title())
+    smart_tags=sorted(dynamic_tags)[:18]
+    dep_candidates=[]
+    dep_patterns=[
+        r'before request to ([^\n*{]+)', r'after request to ([^\n*{]+)',
+        r'before ([a-zA-Z0-9_. -]+?) call', r'after ([a-zA-Z0-9_. -]+?) call',
+        r'processor:\s*([^;\]]+)', r'\bintermediaryId"?\s*:\s*"([^"]+)"',
+        r'\bsourceModule"?\s*:\s*"([^"]+)"', r'\bpaymentApp"?\s*:\s*"([^"]+)"'
+    ]
+    for pat in dep_patterns:
+        dep_candidates += re.findall(pat, raw, re.I)
+    deps=[]
+    for d in dep_candidates:
+        d=str(d).strip().strip('"').strip()
+        d=re.sub(r'\s+log.*$','',d, flags=re.I)
+        d=re.sub(r'/processors.*$','',d, flags=re.I)
+        if d and len(d) <= 70 and not re.search(r'logger|muleruntime|runtime|processor$', d, re.I):
+            deps.append(d)
+    deps=uniq(deps, 20)
     findings = [
         {"label": f"{detected_env}: {len(errors)} error line(s), {len(warns)} warning line(s)", "type": "error" if errors else ("warn" if warns else "ok")},
         {"label": f"Applications detected: {', '.join(apps[:8]) or 'none'}", "type": "ok" if apps else "warn"},
@@ -664,13 +692,23 @@ def alerts():
                      "threshold": r.threshold, "active": r.active} for r in rules])
 
 # ── History ───────────────────────────────────────────────────────────────────
-@app.route("/history")
+@app.route("/history", methods=["GET", "DELETE"])
 @login_required
 def history():
     user = get_current_user()
     if user is None:
         return jsonify({"error": "Session expired. Please login again."}), 401
     uid = user.id
+    if request.method == 'DELETE':
+        sid = request.args.get('id')
+        q = LogSession.query.filter_by(user_id=uid)
+        if sid:
+            item = q.filter_by(id=sid).first()
+            if item: db.session.delete(item)
+        else:
+            for item in q.all(): db.session.delete(item)
+        db.session.commit()
+        return jsonify({'status':'deleted'})
     sessions = LogSession.query.filter_by(user_id=uid)\
                                .order_by(LogSession.created_at.desc()).limit(50).all()
     return jsonify([{
