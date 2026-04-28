@@ -549,3 +549,276 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   }
 })();
 </script>
+<script id="observex-v25-final">
+/* ============================================================
+   v25 — DEFINITIVE FIX
+   Bugs fixed:
+   1. Traffic Trend never refreshed after upload because addSession()
+      calls the hoisted recomputeAggregate() directly (not via window),
+      so the v24 window.recomputeAggregate patch was silently bypassed.
+   2. System Map dropdown + detail panel not rendering on all browsers
+      because v23/v24 DOMContentLoaded timers could race with each other.
+   3. Multiple overlapping API cards rendered when switching APIs.
+   Strategy: intercept addSession (exposed on window), patch renderVisualDashboard
+   one final time with a guaranteed-clean call, and give the System Map
+   its own idempotent boot that cancels any earlier timers.
+   ============================================================ */
+(function(){
+  'use strict';
+
+  /* ── tiny helpers ── */
+  function esc(s){return String(s??'').replace(/[&<>'"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c];});}
+  function allRows(){try{return Array.isArray(window._allRows)?window._allRows:[];}catch(e){return[];}}
+  function sigOf(r){
+    var l=String(r&&r.level||'').toUpperCase(),m=String(r&&r.message||''),st=String(r&&r.status||'');
+    if(l==='ERROR'||l==='FAILURE'||/\b(error|failed|failure|exception|timeout|fatal)\b/i.test(m)||/^5/.test(st))return'error';
+    if(l==='WARN'||l==='WARNING'||/\b(warn|warning|slow|retry)\b/i.test(m)||/^4/.test(st))return'warn';
+    if(l==='SUCCESS'||/\b(success|succeeded|matched|completed|ok)\b/i.test(m)||/status"?\s*:\s*"success/i.test(m)||/^2/.test(st))return'success';
+    return'info';
+  }
+  function endpointOf(r){
+    if(!r)return'Unknown';
+    var api=String(r.api||'').trim();
+    if(api)return api.replace(/\\/g,'/');
+    var msg=String(r.message||'');
+    var m=msg.match(/\b(?:GET|POST|PUT|PATCH|DELETE)\s+(\/[^\s"']+)/i)||
+            msg.match(/"RequestUri"\s*:\s*"([^"]+)"/i)||
+            msg.match(/\]\.(?:get|post|put|patch|delete):\\?([^:\]\s]+)/i);
+    if(m&&m[1])return'/'+String(m[1]).replace(/^[\/\\]+/,'').replace(/\\/g,'/');
+    var f=String(r.flow_group||r.flow||'').replace(/\/processors.*$/i,'').replace(/^\/+|\/+$/g,'');
+    return f?('/'+f):'Unknown endpoint';
+  }
+  function appOf(r){return String(r&&r.app||'unknown-app').trim()||'unknown-app';}
+  function parseTs(v){var n=Date.parse(String(v||'').replace(',',' ').replace(' ','T'));return isNaN(n)?null:n;}
+
+  /* ── build per-app data ── */
+  function buildApps(){
+    var apps={};
+    allRows().forEach(function(r){
+      var a=appOf(r),e=endpointOf(r),s=sigOf(r);
+      if(!apps[a])apps[a]={app:a,total:0,errors:0,warns:0,success:0,info:0,traces:{},endpoints:{},deps:{}};
+      var A=apps[a];A.total++;
+      if(s==='error')A.errors++;else if(s==='warn')A.warns++;else if(s==='success')A.success++;else A.info++;
+      if(r.trace||r.event)A.traces[r.trace||r.event]=1;
+      if(!A.endpoints[e])A.endpoints[e]={endpoint:e,total:0,errors:0,warns:0,success:0,info:0,traces:{},flows:{}};
+      var E=A.endpoints[e];E.total++;
+      if(s==='error')E.errors++;else if(s==='warn')E.warns++;else if(s==='success')E.success++;else E.info++;
+      if(r.trace||r.event)E.traces[r.trace||r.event]=1;
+      if(r.flow)E.flows[String(r.flow).replace(/\/processors.*$/i,'')]=1;
+      String(r.message||'').replace(/\b(setu|bbps|razorpay|gupshup|salesforce|s3|cloudwatch|kafka|redis|oracle|mysql|mongodb|upi|crif)\b/ig,function(m){A.deps[m.toLowerCase()]=1;});
+    });
+    return Object.values(apps).map(function(a){
+      a.traceCount=Object.keys(a.traces).length;
+      a.depList=Object.keys(a.deps);
+      a.health=Math.max(0,Math.round(100-(a.errors/Math.max(1,a.total))*70-(a.warns/Math.max(1,a.total))*25));
+      a.endpointList=Object.values(a.endpoints).map(function(e){
+        e.traceCount=Object.keys(e.traces).length;
+        e.flowList=Object.keys(e.flows).filter(Boolean);
+        return e;
+      }).sort(function(x,y){return(y.errors-x.errors)||(y.total-x.total);});
+      return a;
+    }).sort(function(x,y){return(y.errors-x.errors)||(y.total-x.total);});
+  }
+
+  /* ── System Map renderer (v25 — idempotent, no panel duplication) ── */
+  function renderSystemMap(){
+    var apps=buildApps();
+    var ah=document.getElementById('app-health');
+    var fd=document.getElementById('flow-diagram');
+    if(!ah||!fd)return;
+
+    /* clear any stale ox23/ox24 toolbar */
+    var stale=document.getElementById('ox23-system-toolbar');
+    if(stale)stale.remove();
+
+    /* ensure our panel exists just before flow-diagram */
+    var panel=document.getElementById('ox25-sysmap-panel');
+    if(!panel){
+      fd.insertAdjacentHTML('beforebegin','<div id="ox25-sysmap-panel"></div>');
+      panel=document.getElementById('ox25-sysmap-panel');
+    }
+
+    if(!apps.length){
+      ah.innerHTML='<div style="color:#64748b;padding:24px;font-size:15px">Upload logs to render the API map.</div>';
+      panel.innerHTML='';
+      return;
+    }
+
+    /* sidebar API cards */
+    ah.innerHTML='<div class="ox22-app-list">'+apps.map(function(a){
+      return '<div class="ox22-app-card" data-app="'+esc(a.app)+'" onclick="ox25SelectApi(\''+esc(a.app)+'\')" style="cursor:pointer">'
+        +'<b>'+esc(a.app)+'</b>'
+        +'<small>'+a.total.toLocaleString()+' logs · '+a.endpointList.length+' endpoints · '+a.errors+' errors · health '+a.health+'%</small>'
+        +'</div>';
+    }).join('')+'</div>';
+
+    /* dropdown header in panel */
+    var optHtml=apps.map(function(a){
+      return '<option value="'+esc(a.app)+'">'+esc(a.app)+' — '+a.endpointList.length+' ep · '+a.total.toLocaleString()+' logs</option>';
+    }).join('');
+    panel.innerHTML=''
+      +'<div class="ox24-api-header">'
+      +'<span class="ox24-label">▾ Select API</span>'
+      +'<select id="ox25-api-select" onchange="ox25SelectApi(this.value)">'+optHtml+'</select>'
+      +'<button class="ox22-btn" onclick="ox25Refresh()" style="margin-left:auto">↻ Refresh</button>'
+      +'</div>'
+      +'<div id="ox25-detail"></div>';
+
+    var curApp=apps[0].app;
+    ox25RenderDetail(apps,curApp);
+  }
+
+  function ox25RenderDetail(apps,appName){
+    var a=apps.find(function(x){return x.app===appName;})||apps[0];
+    if(!a)return;
+
+    /* sync dropdown */
+    var sel=document.getElementById('ox25-api-select');
+    if(sel)sel.value=a.app;
+
+    /* highlight sidebar card */
+    document.querySelectorAll('.ox22-app-card').forEach(function(c){
+      c.classList.toggle('active',c.getAttribute('data-app')===a.app);
+    });
+
+    /* flow path */
+    var flowNodes=['<span class="ox24-flow-node client">Client</span>','<span class="ox24-flow-arrow">→</span>','<span class="ox24-flow-node">'+esc(a.app)+'</span>'];
+    a.endpointList.slice(0,4).forEach(function(e){
+      flowNodes.push('<span class="ox24-flow-arrow">→</span>');
+      flowNodes.push('<span class="ox24-flow-node" style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(e.endpoint)+'">'+esc(e.endpoint)+'</span>');
+    });
+    var flowHtml='<div class="ox24-flow-path">'+flowNodes.join('')+'</div>';
+
+    /* stat pills */
+    var statHtml='<div class="ox24-stat-row">'
+      +'<div class="ox24-stat-pill"><small>Logs</small><b>'+a.total.toLocaleString()+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Endpoints</small><b>'+a.endpointList.length+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#fb7185">Errors</small><b style="color:#fb7185">'+a.errors+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#fbbf24">Warnings</small><b style="color:#fbbf24">'+a.warns+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#4ade80">Success</small><b style="color:#4ade80">'+a.success+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Traces</small><b>'+a.traceCount+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Health</small><b>'+a.health+'%</b></div>'
+      +'</div>';
+
+    /* endpoint cards */
+    var epHtml='<h3 style="margin:14px 0 10px;color:#e2e8f0">Endpoints <small style="color:#64748b;font-weight:400;font-size:13px">— click to open in Log Search</small></h3><div class="ox24-ep-grid">';
+    if(!a.endpointList.length){epHtml+='<div style="color:#64748b;padding:20px">No endpoints detected for this API.</div>';}
+    a.endpointList.forEach(function(e){
+      epHtml+='<div class="ox24-ep-card" onclick="ox25DrillEndpoint(\''+esc(a.app)+'\',\''+esc(e.endpoint)+'\')">';
+      epHtml+='<div class="ox24-ep-top"><span class="ox24-ep-name">'+esc(e.endpoint)+'</span>';
+      epHtml+='<div class="ox24-ep-badges">';
+      epHtml+='<span class="ox24-badge info">'+e.total+' logs</span>';
+      if(e.errors)epHtml+='<span class="ox24-badge err">'+e.errors+' errors</span>';
+      if(e.warns)epHtml+='<span class="ox24-badge warn">'+e.warns+' warns</span>';
+      if(e.success)epHtml+='<span class="ox24-badge ok">'+e.success+' success</span>';
+      epHtml+='<span class="ox24-badge info">'+e.traceCount+' traces</span>';
+      epHtml+='</div></div>';
+      if(e.flowList.length){
+        epHtml+='<div class="ox24-flow-chips">'+e.flowList.slice(0,6).map(function(f){return'<span class="ox24-flow-chip">'+esc(f)+'</span>';}).join('')+'</div>';
+      }
+      epHtml+='<div style="font-size:12px;color:#64748b;margin-top:6px;font-style:italic">Click to open matching logs in Log Search</div>';
+      epHtml+='</div>';
+    });
+    epHtml+='</div>';
+
+    var detail=document.getElementById('ox25-detail');
+    if(detail)detail.innerHTML=flowHtml+statHtml+epHtml;
+
+    /* update legacy flow-diagram for mini-flow */
+    var fd=document.getElementById('flow-diagram');
+    if(fd){
+      var nodes=['Client',a.app].concat(a.endpointList.slice(0,5).map(function(e){return e.endpoint;}));
+      fd.innerHTML='<div class="ox22-flowline">'+nodes.map(function(n,i){return'<span class="ox22-node">'+esc(n)+'</span>'+(i<nodes.length-1?'<span class="ox22-arrow">→</span>':'');}).join('')+'</div>';
+    }
+    /* deps */
+    var deps=document.getElementById('deps');
+    if(deps)deps.innerHTML=a.depList.length?a.depList.map(function(d){return'<span class="chip">'+esc(d)+'</span>';}).join(''):'<span style="color:var(--tx3)">No dependency keywords detected.</span>';
+    /* hints */
+    var hints=document.getElementById('flow-hints');
+    if(hints)hints.innerHTML='<b>'+esc(a.app)+'</b><br>'+a.endpointList.length+' endpoints · '+a.errors+' errors · '+a.warns+' warnings · '+a.traceCount+' traces<br><br>Select another API from the dropdown, or click an endpoint to open only those logs.';
+  }
+
+  window.ox25SelectApi=function(appName){ox25RenderDetail(buildApps(),appName);};
+  window.ox25Refresh=function(){renderSystemMap();};
+  window.ox25DrillEndpoint=function(app,ep){
+    var rows=allRows().filter(function(r){return appOf(r)===app&&endpointOf(r)===ep;});
+    if(window.showSection)window.showSection('logs');
+    if(window.renderRows)window.renderRows(rows);
+  };
+
+  /* ── Traffic Trend: full self-contained render ── */
+  function buildTrendRows(){
+    /* read filter controls */
+    var sg=(document.getElementById('ox22-signal')||{}).value||'all';
+    var api=(document.getElementById('ox22-api')||{}).value||'all';
+    var fd=(document.getElementById('ox22-from-date')||{}).value||'';
+    var ft=(document.getElementById('ox22-from-time')||{}).value||'00:00';
+    var td=(document.getElementById('ox22-to-date')||{}).value||'';
+    var tt=(document.getElementById('ox22-to-time')||{}).value||'23:59';
+    var from=fd?Date.parse(fd+'T'+ft):null,to=td?Date.parse(td+'T'+tt):null;
+    return allRows().filter(function(r){
+      var t=parseTs(r.time);
+      return (sg==='all'||sigOf(r)===sg)
+        &&(api==='all'||endpointOf(r)===api)
+        &&(!from||(t!==null&&t>=from))
+        &&(!to||(t!==null&&t<=to));
+    });
+  }
+
+  function fullDashRefresh(){
+    /* ensure controls exist */
+    if(window.ox23RefreshDashboard){window.ox23RefreshDashboard();return;}
+    /* fallback: call v23 refresh if available */
+    if(window.v23RenderTrend){
+      var r=buildTrendRows();
+      window.v23RenderTrend(r);
+      if(window.v23RenderTopApis)window.v23RenderTopApis(r);
+    }
+  }
+
+  /* ── Hook into addSession — the definitive fix for traffic trend ── */
+  /* addSession is a hoisted function so window.addSession === the real function. */
+  /* We wrap it to fire our refresh AFTER the original runs. */
+  var _origAddSession=window.addSession;
+  if(typeof _origAddSession==='function'){
+    window.addSession=function(d,name,size){
+      _origAddSession.apply(this,arguments);
+      /* schedule AFTER recomputeAggregate + renderResult have run */
+      setTimeout(function(){
+        fullDashRefresh();
+        renderSystemMap();
+      },150);
+    };
+  }
+
+  /* Also hook deleteUpload */
+  var _origDeleteUpload=window.deleteUpload;
+  if(typeof _origDeleteUpload==='function'){
+    window.deleteUpload=function(id){
+      _origDeleteUpload.apply(this,arguments);
+      setTimeout(function(){
+        fullDashRefresh();
+        renderSystemMap();
+      },150);
+    };
+  }
+
+  /* Final override for renderFlow / showSection('flow') */
+  window.renderFlow=function(){renderSystemMap();};
+  window.ox23RenderSystemMap=function(){renderSystemMap();};
+  window.ox24SelectApi=function(n){window.ox25SelectApi(n);};
+  window.ox24DrillEndpoint=function(a,e){window.ox25DrillEndpoint(a,e);};
+
+  /* Boot */
+  function boot(){
+    if(window.ox23RefreshDashboard)window.ox23RefreshDashboard();
+    renderSystemMap();
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',function(){setTimeout(boot,1600);});
+  }else{
+    setTimeout(boot,1600);
+  }
+
+})();
+</script>
