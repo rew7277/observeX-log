@@ -43,11 +43,19 @@ if not _secret_key:
     _secret_key = secrets.token_hex(32)
     app.logger.warning("SECRET_KEY env var is not set. Sessions will be invalidated on every restart. Set SECRET_KEY in Railway variables before production.")
 app.config["SECRET_KEY"] = _secret_key
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", "sqlite:///observex.db"
-).replace("postgres://", "postgresql://")
+# Railway PostgreSQL
+_database_url = os.environ.get("DATABASE_URL", "sqlite:///observex.db").strip()
+if _database_url.startswith("postgres://"):
+    _database_url = _database_url.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = _database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", "280"))}
+if _database_url.startswith("postgresql"):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"].update({"pool_size": int(os.environ.get("DB_POOL_SIZE", "5")), "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "10")), "connect_args": {"sslmode": os.environ.get("PGSSLMODE", "prefer")}})
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
+MAX_ANALYSE_LINES = int(os.environ.get("MAX_ANALYSE_LINES", "250000"))
+MAX_PERSIST_CHARS = int(os.environ.get("MAX_PERSIST_CHARS", "8000000"))
+SKIP_PERSIST_RAW = os.environ.get("SKIP_PERSIST_RAW", "0").lower() in {"1", "true", "yes"}
 
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -701,13 +709,16 @@ def mask_secrets(text: str):
 
 
 def persist_raw_upload(user_id: int, session_id: int, filename: str, raw: str):
-    """Persist masked raw logs to Railway volume for audit/re-open without keeping sensitive values."""
+    """Persist a masked copy without slowing large uploads."""
+    if SKIP_PERSIST_RAW:
+        return None
     safe_name = secure_filename(filename or "upload.log")[:120]
     user_dir = os.path.join(UPLOAD_DIR, str(user_id))
     os.makedirs(user_dir, exist_ok=True)
     path = os.path.join(user_dir, f"session-{session_id}-{safe_name}.masked.log")
+    text = raw if len(raw) <= MAX_PERSIST_CHARS else (raw[:MAX_PERSIST_CHARS] + "\n...[TRUNCATED_FOR_FAST_UPLOAD]...")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(mask_secrets(raw))
+        fh.write(mask_secrets(text))
     return path
 
 
@@ -790,6 +801,12 @@ def row_matches_filters(row, filters):
     return True
 
 def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = ""):
+    truncated_for_speed = False
+    if MAX_ANALYSE_LINES > 0:
+        raw_lines = raw.splitlines()
+        if len(raw_lines) > MAX_ANALYSE_LINES:
+            raw = "\n".join(raw_lines[-MAX_ANALYSE_LINES:])
+            truncated_for_speed = True
     records = group_multiline_log_records(raw, filename)
     detected_env = infer_environment(raw[:5000], env)
     all_rows = build_log_rows(records, detected_env, filename)
@@ -949,7 +966,8 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         "flow": "Client → " + " → ".join(apps[:5]) + (" → External Dependencies" if deps else "") if apps else "",
         "error_lines": [r['message'] for r in errors[:50]], "slow_lines": [r['message'] for r in rows if r.get('latency',0)>3000][:50],
         "timeline": rows[:500],
-        "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11"
+        "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11",
+        "truncated_for_speed": truncated_for_speed, "max_analyse_lines": MAX_ANALYSE_LINES
     }
 
 def send_reset_email(user):
