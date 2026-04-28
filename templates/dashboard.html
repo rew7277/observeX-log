@@ -486,6 +486,101 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
 })();
 </script>
 
+<!-- v29 final interaction patch: working dashboard trend filters + Log Search filters/buttons -->
+<style id="observex-v29-working-filters">
+#ox22-trend-controls{position:relative!important;margin:16px 0 18px!important;padding:18px!important;border-radius:20px!important;border:1px solid rgba(139,92,246,.48)!important;background:radial-gradient(circle at top left,rgba(168,85,247,.20),transparent 30%),linear-gradient(135deg,rgba(31,28,63,.97),rgba(15,15,34,.98))!important;box-shadow:0 18px 48px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.06)!important;overflow:hidden!important;animation:oxV29In .35s ease both!important}
+#ox22-trend-controls:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(255,255,255,.055),transparent);transform:translateX(-120%);animation:oxV29Sheen 5s ease-in-out infinite!important}
+#ox22-trend-controls .ox22-grid{position:relative;z-index:1;display:grid!important;grid-template-columns:repeat(6,minmax(135px,1fr))!important;gap:12px!important;align-items:end!important}
+#ox22-trend-controls .ox22-field{display:flex!important;flex-direction:column!important;gap:7px!important;min-width:0!important}
+#ox22-trend-controls label{margin:0!important;color:#b7c4ff!important;font-size:11px!important;font-weight:900!important;text-transform:uppercase!important;letter-spacing:.08em!important}
+#ox22-trend-controls select,#ox22-trend-controls input{height:44px!important;width:100%!important;margin:0!important;padding:0 12px!important;border-radius:13px!important;border:1px solid rgba(139,92,246,.50)!important;background:rgba(5,5,18,.78)!important;color:#f8fafc!important;font-size:13px!important;font-weight:800!important;outline:none!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)!important}
+#ox22-trend-controls select:focus,#ox22-trend-controls input:focus{border-color:#c084fc!important;box-shadow:0 0 0 3px rgba(124,58,237,.22)!important}
+#ox22-trend-controls input[type=date]::-webkit-calendar-picker-indicator,#ox22-trend-controls input[type=time]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.72}
+#ox22-trend-controls .ox22-actions{position:relative;z-index:1;display:flex!important;gap:9px!important;align-items:center!important;flex-wrap:wrap!important;margin-top:14px!important}
+#ox22-trend-controls .ox22-btn{height:42px!important;min-width:52px!important;margin:0!important;padding:0 15px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;border-radius:13px!important;border:1px solid rgba(139,92,246,.42)!important;background:rgba(124,58,237,.18)!important;color:#eee7ff!important;font-size:13px!important;font-weight:900!important;line-height:1!important;cursor:pointer!important;transition:transform .16s ease,background .16s ease,box-shadow .16s ease!important}
+#ox22-trend-controls .ox22-btn.primary{border:0!important;background:linear-gradient(135deg,#a855f7,#6366f1)!important;color:#fff!important;box-shadow:0 12px 30px rgba(124,58,237,.28)!important}
+#ox22-trend-controls .ox22-btn:hover{transform:translateY(-2px)!important;background:rgba(124,58,237,.36)!important;box-shadow:0 14px 32px rgba(124,58,237,.20)!important}
+#sec-logs .v26-filter-shell{display:block!important;visibility:visible!important;opacity:1!important;transform:none!important}
+#sec-logs .v26-filter-row{display:grid!important;grid-template-columns:repeat(4,minmax(180px,1fr))!important;gap:16px!important}
+#sec-logs .v26-filter-row2{grid-template-columns:minmax(250px,1fr) minmax(250px,1fr) minmax(320px,.8fr) minmax(420px,1.35fr)!important}
+#sec-logs .v26-quick-range{align-self:end!important}
+#sec-logs button.v26-lp,#sec-logs button.v26-qr,#sec-logs button.v26-chip,#sec-logs button.v26-search-btn,#sec-logs button.v26-clear-btn,#sec-logs button.v26-ql-run,#sec-logs button.v26-save-btn{appearance:none!important;border-style:solid!important;font-family:Inter,system-ui,sans-serif!important}
+#sec-logs .v26-lp.active{background:linear-gradient(135deg,#a855f7,#6366f1)!important;color:#fff!important;border-color:transparent!important}
+@keyframes oxV29In{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes oxV29Sheen{0%,72%{transform:translateX(-120%)}100%{transform:translateX(120%)}}
+@media(max-width:1180px){ #ox22-trend-controls .ox22-grid{grid-template-columns:repeat(3,minmax(160px,1fr))!important}#sec-logs .v26-filter-row,#sec-logs .v26-filter-row2{grid-template-columns:repeat(2,minmax(220px,1fr))!important}#sec-logs .v26-fg-search{grid-column:1/-1!important}}
+@media(max-width:720px){ #ox22-trend-controls .ox22-grid,#sec-logs .v26-filter-row,#sec-logs .v26-filter-row2{grid-template-columns:1fr!important}#sec-logs .v26-search-wrap,#sec-logs .v26-dt-pair{flex-wrap:wrap!important}}
+</style>
+<script id="observex-v29-working-filters-js">
+(function(){
+  'use strict';
+  function el(id){return document.getElementById(id);}
+  function rows(){try{return Array.isArray(_allRows)?_allRows:(window._allRows||[]);}catch(e){return window._allRows||[];}}
+  function setVisible(r){try{_visibleRows=r;}catch(e){window._visibleRows=r;} window._visibleRows=r;}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function parseTs(v){
+    if(v==null||v==='')return null;
+    var s=String(v).trim();
+    var n=Date.parse(s); if(!isNaN(n))return n;
+    n=Date.parse(s.replace(' ','T')); if(!isNaN(n))return n;
+    var m=s.match(/(\d{2})[-\/](\d{2})[-\/](\d{4})[\sT]+(\d{2}:\d{2})(?::(\d{2}))?/);
+    if(m){n=Date.parse(m[3]+'-'+m[2]+'-'+m[1]+'T'+m[4]+':'+(m[5]||'00')); if(!isNaN(n))return n;}
+    return null;
+  }
+  function ymd(d){var p=function(n){return String(n).padStart(2,'0')};return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+  function hm(d){var p=function(n){return String(n).padStart(2,'0')};return p(d.getHours())+':'+p(d.getMinutes());}
+  function signal(r){var l=String(r.level||'').toUpperCase(),msg=String(r.message||''); if(l==='ERROR'||l==='FAILURE'||/\b(error|exception|failed|failure|timeout|5\d\d)\b/i.test(msg))return 'error'; if(l==='WARN'||/\bwarn/i.test(msg))return 'warn'; if(l==='SUCCESS'||/\b(success|completed|200|201|204|ok)\b/i.test(msg))return 'success'; return 'info';}
+  function endpoint(r){return String(r.endpoint||r.api||r.path||r.flow||r.route||r.app||'Unknown');}
+  function hay(r){var out=[];for(var k in r){out.push(r[k]);}return out.join(' ').toLowerCase();}
+  function inRange(r,fd,ft,td,tt){var t=parseTs(r.time); if(!t)return true; var from=fd?Date.parse(fd+'T'+(ft||'00:00')):null, to=td?Date.parse(td+'T'+(tt||'23:59')):null; return (!from||t>=from)&&(!to||t<=to);}
+
+  function ensureTrendControls(){
+    var trend=el('dash-trend'); if(!trend)return;
+    var panel=el('ox22-trend-controls');
+    if(!panel){
+      trend.insertAdjacentHTML('beforebegin','<div id="ox22-trend-controls" class="ox22-panel"><div class="ox22-grid"><div class="ox22-field"><label>Traffic signal</label><select id="ox22-signal"><option value="all">All signals</option><option value="success">Success only</option><option value="error">Errors / failures</option><option value="warn">Warnings</option><option value="info">Info / debug</option></select></div><div class="ox22-field"><label>API / endpoint</label><select id="ox22-api"><option value="all">All APIs / endpoints</option></select></div><div class="ox22-field"><label>From date</label><input id="ox22-from-date" type="date"></div><div class="ox22-field"><label>From time</label><input id="ox22-from-time" type="time"></div><div class="ox22-field"><label>To date</label><input id="ox22-to-date" type="date"></div><div class="ox22-field"><label>To time</label><input id="ox22-to-time" type="time"></div></div><div class="ox22-actions"><button type="button" class="ox22-btn primary" onclick="ox22RefreshDashboard()">Apply filters</button><button type="button" class="ox22-btn" onclick="ox22QuickRange(15)">15m</button><button type="button" class="ox22-btn" onclick="ox22QuickRange(60)">1h</button><button type="button" class="ox22-btn" onclick="ox22QuickRange(1440)">24h</button><button type="button" class="ox22-btn" onclick="ox22ClearFilters()">Clear</button></div></div>');
+    }
+    ['ox22-signal','ox22-api','ox22-from-date','ox22-from-time','ox22-to-date','ox22-to-time'].forEach(function(id){var x=el(id); if(x&&!x.dataset.v29){x.dataset.v29='1'; x.addEventListener('change',window.ox22RefreshDashboard);}});
+    populateTrendApis();
+  }
+  function populateTrendApis(){var sel=el('ox22-api'); if(!sel)return; var current=sel.value||'all'; var names=Array.from(new Set(rows().map(endpoint).filter(Boolean))).sort(); sel.innerHTML='<option value="all">All APIs / endpoints</option>'+names.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+'</option>';}).join(''); if(current&&Array.from(sel.options).some(function(o){return o.value===current;}))sel.value=current;}
+  function selectedTrendRows(){var sg=(el('ox22-signal')||{}).value||'all', api=(el('ox22-api')||{}).value||'all', fd=(el('ox22-from-date')||{}).value||'', ft=(el('ox22-from-time')||{}).value||'', td=(el('ox22-to-date')||{}).value||'', tt=(el('ox22-to-time')||{}).value||'';return rows().filter(function(r){return (sg==='all'||signal(r)===sg)&&(api==='all'||endpoint(r)===api)&&inRange(r,fd,ft,td,tt);});}
+  function renderTrendFiltered(r){
+    var map={}; r.forEach(function(row){var t=parseTs(row.time); if(!t)return; var d=new Date(t), key=ymd(d)+' '+hm(d); var s=signal(row), ep=endpoint(row); if(!map[key])map[key]={time:key,total:0,errors:0,warns:0,success:0,info:0,apis:{}}; var b=map[key]; b.total++; if(s==='error')b.errors++; else if(s==='warn')b.warns++; else if(s==='success')b.success++; else b.info++; (b.apis[ep]||(b.apis[ep]={total:0})).total++;});
+    var buckets=Object.keys(map).sort().map(function(k){var b=map[k],top='Unknown',best=-1;Object.keys(b.apis).forEach(function(a){if(b.apis[a].total>best){best=b.apis[a].total;top=a;}});b.top_api=top;return b;}).slice(-48);
+    var tr=el('dash-trend'), max=Math.max.apply(null,[1].concat(buckets.map(function(b){return b.total;})));
+    if(tr)tr.innerHTML=buckets.length?buckets.map(function(b){return '<div class="trend-bar '+(b.errors?'err':(b.warns?'warn':''))+'" onclick="ox22DrillBucket(\''+esc(b.time)+'\')" title="'+esc(b.time)+' · '+esc(b.top_api)+' · '+b.total+' logs · '+b.errors+' errors · '+b.warns+' warnings" style="height:'+Math.max(18,Math.round((b.total/max)*100))+'%"></div>';}).join(''):'<div class="ox23-message" style="color:#cbd5e1;padding:30px;font-size:15px">No traffic for selected filters.</div>';
+    var cap=el('trend-caption'); if(cap){var top=r.reduce(function(acc,row){var ep=endpoint(row); acc[ep]=(acc[ep]||0)+1; return acc;},{}); var name=Object.keys(top).sort(function(a,b){return top[b]-top[a];})[0]; cap.innerHTML=name?'Showing <b>'+r.length.toLocaleString()+'</b> rows. Highest endpoint: <b>'+esc(name)+'</b> ('+top[name]+' logs).':'No rows match selected filters.';}
+  }
+  window.ox22RefreshDashboard=function(){ensureTrendControls(); populateTrendApis(); renderTrendFiltered(selectedTrendRows());};
+  window.ox23RefreshDashboard=window.ox22RefreshDashboard;
+  window.ox22ClearFilters=function(){['ox22-from-date','ox22-from-time','ox22-to-date','ox22-to-time'].forEach(function(id){if(el(id))el(id).value='';}); if(el('ox22-signal'))el('ox22-signal').value='all'; if(el('ox22-api'))el('ox22-api').value='all'; window.ox22RefreshDashboard();};
+  window.ox23ClearFilters=window.ox22ClearFilters;
+  window.ox22QuickRange=function(mins){var ts=rows().map(function(r){return parseTs(r.time);}).filter(function(x){return x!==null;}); var end=ts.length?Math.max.apply(null,ts):Date.now(), start=end-mins*60000, s=new Date(start), e=new Date(end); if(el('ox22-from-date'))el('ox22-from-date').value=ymd(s); if(el('ox22-from-time'))el('ox22-from-time').value=hm(s); if(el('ox22-to-date'))el('ox22-to-date').value=ymd(e); if(el('ox22-to-time'))el('ox22-to-time').value=hm(e); window.ox22RefreshDashboard();};
+  window.ox23QuickRange=window.ox22QuickRange;
+  window.ox22DrillBucket=function(bucket){var out=selectedTrendRows().filter(function(r){var t=parseTs(r.time); if(!t)return false; var d=new Date(t); return ymd(d)+' '+hm(d)===bucket;}); if(window.showSection)window.showSection('logs'); if(window.renderRows)window.renderRows(out);};
+  window.ox23DrillBucket=window.ox22DrillBucket;
+
+  window.v26SetLevel=function(level){level=String(level||'').toUpperCase(); var fs=el('filter-level'); if(fs)fs.value=level; document.querySelectorAll('#v26-level-pills .v26-lp').forEach(function(b){b.classList.remove('active');}); var want=level||'ALL'; document.querySelectorAll('#v26-level-pills .v26-lp').forEach(function(b){if((b.textContent||'').trim().toUpperCase()===want)b.classList.add('active');}); window.applyClientSearch();};
+  window.quickLevel=window.v26SetLevel;
+  window.applyClientSearch=function(){var q=(el('filter-q')||{}).value||'', env=(el('filter-env')||{}).value||'', file=(el('filter-file')||{}).value||'', app=(el('filter-app')||{}).value||'', level=(el('filter-level')||{}).value||'', fd=(el('from-date')||{}).value||'', ft=(el('from-time')||{}).value||'', td=(el('to-date')||{}).value||'', tt=(el('to-time')||{}).value||''; q=q.toLowerCase(); env=env.toLowerCase(); file=file.toLowerCase(); app=app.toLowerCase(); level=level.toLowerCase(); var out=rows().filter(function(r){var rf=String(r.uploadName||r.file||'').toLowerCase(), ra=String(r.app||'').toLowerCase(), re=String(r.env||'').toLowerCase(), rl=String(r.level||'').toLowerCase(); return (!env||re===env)&&(!file||rf===file)&&(!app||ra===app)&&(!level||rl===level)&&inRange(r,fd,ft,td,tt)&&(!q||hay(r).indexOf(q)>=0||(q==='trace'&&(r.trace||r.event)));}); setVisible(out); if(window.renderRows)window.renderRows(out); var c=el('v26-result-count'); if(c)c.textContent=out.length.toLocaleString()+' log'+(out.length!==1?'s':'')+' match current filters'; var tc=el('v26-table-count'); if(tc)tc.textContent=out.length.toLocaleString()+' rows';};
+  window.clearLogFilters=function(){['filter-q','from-date','from-time','to-date','to-time','v26-ql'].forEach(function(id){if(el(id))el(id).value='';}); ['filter-env','filter-file','filter-app','filter-level'].forEach(function(id){if(el(id))el(id).value='';}); document.querySelectorAll('#v26-level-pills .v26-lp').forEach(function(b){b.classList.remove('active');}); var all=document.querySelector('#v26-level-pills .v26-lp-all'); if(all)all.classList.add('active'); var r=rows().slice(); setVisible(r); if(window.renderRows)window.renderRows(r); var c=el('v26-result-count'); if(c)c.textContent=r.length.toLocaleString()+' total logs';};
+  window.v26QuickRange=function(mins){var ts=rows().map(function(r){return parseTs(r.time);}).filter(function(x){return x!==null;}); var end=ts.length?Math.max.apply(null,ts):Date.now(), start=end-mins*60000, s=new Date(start), e=new Date(end); if(el('from-date'))el('from-date').value=ymd(s); if(el('from-time'))el('from-time').value=hm(s); if(el('to-date'))el('to-date').value=ymd(e); if(el('to-time'))el('to-time').value=hm(e); window.applyClientSearch();};
+  window.v26LiveSearch=function(){clearTimeout(window.__v29Live); window.__v29Live=setTimeout(window.applyClientSearch,160);};
+  window.quickSearch=function(q){if(el('filter-q'))el('filter-q').value=q; if(window.showSection)window.showSection('logs'); window.applyClientSearch();};
+  window.v26FilterErrors=function(){window.v26SetLevel('ERROR');};
+  window.v26Last100=function(){var r=rows(), out=r.slice(Math.max(0,r.length-100)); setVisible(out); if(window.renderRows)window.renderRows(out); var c=el('v26-result-count'); if(c)c.textContent='Showing last '+out.length+' of '+r.length.toLocaleString()+' logs';};
+  window.v26RunQuery=function(){var q=(el('v26-ql')||{}).value||''; if(!q.trim())return; q.split(/\s+/).forEach(function(p){var m=p.match(/^([^=]+)=(.*)$/); if(!m)return; var k=m[1].toLowerCase(), v=m[2]; if(k==='env'&&el('filter-env'))el('filter-env').value=v; else if((k==='app'||k==='api')&&el('filter-app'))el('filter-app').value=v; else if(k==='level')window.v26SetLevel(v); else if((k==='trace'||k==='event'||k==='q')&&el('filter-q'))el('filter-q').value=v;}); window.applyClientSearch();};
+  window.v26SetQueryExample=function(q){if(el('v26-ql'))el('v26-ql').value=q;};
+  window.v26CopyVisible=function(){var r;try{r=Array.isArray(_visibleRows)?_visibleRows:(window._visibleRows||[]);}catch(e){r=window._visibleRows||[]} var text=r.map(function(x){return [x.time,x.env,x.level,x.app,x.trace||x.event||'',x.message||''].join('\t');}).join('\n'); if(navigator.clipboard)navigator.clipboard.writeText(text);};
+
+  var oldRenderResult=window.renderResult;
+  window.renderResult=function(d){if(oldRenderResult)oldRenderResult(d); setTimeout(function(){ensureTrendControls(); window.ox22RefreshDashboard();},50);};
+  document.addEventListener('DOMContentLoaded',function(){setTimeout(function(){ensureTrendControls(); window.ox22RefreshDashboard(); document.querySelectorAll('#sec-logs button').forEach(function(b){if(!b.getAttribute('type'))b.setAttribute('type','button');});},700);});
+})();
+</script>
+
+
 {% endblock %}
 
 <style id="observex-v23-dashboard-fixes">
@@ -1471,3 +1566,4 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   window.v26Last100=function(){if(typeof renderRows==='function') renderRows((window._allRows||[]).slice(-100))};
 })();
 </script>
+
