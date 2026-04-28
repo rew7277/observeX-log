@@ -1216,10 +1216,11 @@ def analyse():
                         apps_found=",".join(result["apps"]))
         db.session.add(ls)
         db.session.commit()
+        # Persist masked raw logs in the background so large uploads do not block the response.
         try:
-            persist_raw_upload(user.id, ls.id, fname, raw)
+            threading.Thread(target=persist_raw_upload, args=(user.id, ls.id, fname, raw), daemon=True).start()
         except Exception:
-            app.logger.exception("Could not persist upload to volume")
+            app.logger.exception("Could not schedule upload persistence")
         duration_ms = int((time.time()-start_ms)*1000)
         db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
         audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
@@ -1881,7 +1882,7 @@ def api_ingest_async():
             try:
                 u=db.session.get(User,uid); res=analyse_log_text(raw_text,"",env,appname)
                 ls=LogSession(user_id=uid, environment=env, filename=appname,total_lines=res["total"], error_count=res["errors"], warn_count=res["warns"], avg_latency=res["latency"], apps_found=",".join(res["apps"]))
-                db.session.add(ls); db.session.commit(); persist_raw_upload(uid,ls.id,appname,raw_text)
+                db.session.add(ls); db.session.commit(); threading.Thread(target=persist_raw_upload, args=(uid,ls.id,appname,raw_text), daemon=True).start()
                 j.status="success"; j.total_lines=res["total"]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
             except Exception as e:
                 j.status="failed"; j.error=str(e)[:2000]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
