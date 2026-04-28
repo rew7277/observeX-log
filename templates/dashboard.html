@@ -1592,7 +1592,7 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   function byId(id){return document.getElementById(id)}
   function safe(v){return (v==null || v==='') ? '—' : String(v)}
   function escHtml(v){return safe(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function allRows(){return Array.isArray(window._allRows)?window._allRows:[]}
+  function allRows(){try{if(typeof _allRows!=='undefined' && Array.isArray(_allRows))return _allRows;}catch(e){} return Array.isArray(window._allRows)?window._allRows:[]}
   function ensureBody(){
     var card=document.querySelector('#log-modal .v26-modal-card'); if(!card) return null;
     var body=card.querySelector('.v26-modal-body');
@@ -1631,6 +1631,8 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   };
   window.closeLogModal=function(){var modal=byId('log-modal'); if(modal) modal.classList.remove('active'); document.body.style.overflow='';};
   window.v26CopyLog=function(){try{navigator.clipboard.writeText(window._currentLogText||'')}catch(e){}};
+  window.copyCurrentLog=window.v26CopyLog;
+  window.v26OpenTraceFromModal=function(){try{var rows=allRows();var r=rows[Number(window.__currentLogIndex||0)];var q=document.getElementById('trace-q');if(r&&q){q.value=r.trace||r.event||'';window.closeLogModal();if(typeof openTrace==='function')openTrace();}}catch(e){}};
   window.v26NavLog=function(step){var i=Number(window.__currentLogIndex||0)+Number(step||0); if(i>=0 && i<allRows().length) window.openLogModal(i)};
   document.addEventListener('keydown',function(e){if(e.key==='Escape') window.closeLogModal();});
 })();
