@@ -1567,3 +1567,71 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
 })();
 </script>
 
+
+<style id="observex-centered-log-modal-fix">
+#log-modal.v26-modal{position:fixed!important;inset:0!important;display:none!important;align-items:center!important;justify-content:center!important;padding:24px!important;background:rgba(3,3,12,.78)!important;backdrop-filter:blur(10px)!important;z-index:2147483000!important;overflow:hidden!important}
+#log-modal.v26-modal.active{display:flex!important;animation:oxLogBackdrop .16s ease-out both!important}
+#log-modal .v26-modal-card{position:relative!important;margin:auto!important;width:min(1120px,calc(100vw - 56px))!important;max-width:1120px!important;height:auto!important;max-height:min(86vh,820px)!important;display:flex!important;flex-direction:column!important;overflow:hidden!important;border-radius:26px!important;border:1px solid rgba(167,139,250,.42)!important;background:radial-gradient(circle at 12% 0%,rgba(168,85,247,.22),transparent 34%),linear-gradient(145deg,rgba(16,16,42,.98),rgba(8,8,22,.99))!important;box-shadow:0 40px 140px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.06) inset,0 0 70px rgba(124,58,237,.18)!important;animation:oxLogModalIn .2s cubic-bezier(.2,.85,.25,1) both!important}
+#log-modal .v26-modal-header{flex:0 0 auto!important;position:sticky!important;top:0!important;z-index:3!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;padding:18px 22px!important;border-bottom:1px solid rgba(255,255,255,.08)!important;background:linear-gradient(135deg,rgba(124,58,237,.18),rgba(15,23,42,.96))!important}
+#log-modal .v26-modal-body{flex:1 1 auto!important;min-height:0!important;overflow:auto!important;padding:18px 22px 22px!important;display:flex!important;flex-direction:column!important;gap:16px!important}
+#log-modal #v26-meta-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:10px!important;margin:0!important;padding:0!important}
+#log-modal .v26-meta-item{min-width:0!important;border:1px solid rgba(148,163,184,.16)!important;background:rgba(255,255,255,.045)!important;border-radius:14px!important;padding:10px 12px!important}
+#log-modal .v26-meta-key{font-size:10px!important;font-weight:950!important;letter-spacing:.08em!important;text-transform:uppercase!important;color:#94a3b8!important;margin-bottom:5px!important}
+#log-modal .v26-meta-val{font-size:12px!important;font-weight:800!important;color:#e5e7eb!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+#log-modal .v26-message-pre{max-height:310px!important;overflow:auto!important;white-space:pre-wrap!important;word-break:break-word!important;margin:0!important;padding:16px!important;border-radius:16px!important;border:1px solid rgba(139,92,246,.24)!important;background:rgba(2,6,23,.66)!important;color:#dbeafe!important;font-size:12px!important;line-height:1.65!important}
+#log-modal .v26-related-list{max-height:220px!important;overflow:auto!important;border:1px solid rgba(255,255,255,.08)!important;border-radius:16px!important;background:rgba(255,255,255,.025)!important}
+#log-modal .v26-related-row{display:grid!important;grid-template-columns:150px 88px 160px minmax(0,1fr)!important;gap:10px!important;align-items:center!important;padding:10px 12px!important;border-bottom:1px solid rgba(255,255,255,.06)!important;cursor:pointer!important;color:#cbd5e1!important}
+#log-modal .v26-related-row:hover,#log-modal .v26-related-row.current-row{background:rgba(124,58,237,.14)!important;color:#fff!important}
+@keyframes oxLogBackdrop{from{opacity:0}to{opacity:1}}
+@keyframes oxLogModalIn{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:900px){#log-modal #v26-meta-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}#log-modal .v26-related-row{grid-template-columns:1fr!important}#log-modal .v26-modal-card{width:calc(100vw - 24px)!important;max-height:90vh!important}#log-modal.v26-modal{padding:12px!important}}
+@media(max-width:520px){#log-modal #v26-meta-grid{grid-template-columns:1fr!important}}
+</style>
+<script id="observex-centered-log-modal-fix-js">
+(function(){
+  function byId(id){return document.getElementById(id)}
+  function safe(v){return (v==null || v==='') ? '—' : String(v)}
+  function escHtml(v){return safe(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function allRows(){return Array.isArray(window._allRows)?window._allRows:[]}
+  function ensureBody(){
+    var card=document.querySelector('#log-modal .v26-modal-card'); if(!card) return null;
+    var body=card.querySelector('.v26-modal-body');
+    if(!body){
+      body=document.createElement('div'); body.className='v26-modal-body';
+      var header=card.querySelector('.v26-modal-header');
+      Array.from(card.children).forEach(function(child){ if(child!==header) body.appendChild(child); });
+      card.appendChild(body);
+    }
+    return body;
+  }
+  window.openLogModal=function(idx){
+    idx=Number(idx); var rows=allRows(); var r=rows[idx]; if(!r) return;
+    window._currentLogText=r.message||''; window.__currentLogIndex=idx;
+    var body=ensureBody();
+    var lvl=safe(r.level).toUpperCase();
+    var badge=byId('v26-modal-level-badge'); if(badge){badge.textContent=lvl; badge.className='v26-modal-badge '+lvl;}
+    var app=byId('v26-modal-app'); if(app) app.textContent=safe(r.app);
+    var time=byId('v26-modal-time'); if(time) time.textContent=safe(r.time);
+    var meta=byId('v26-meta-grid');
+    if(meta){
+      var keys=[['time','Time'],['env','Environment'],['level','Level'],['app','App / API'],['trace','Trace ID'],['event','Event ID'],['flow','Flow / Endpoint'],['status','Status'],['latency','Latency'],['uploadName','File'],['line_no','Line #'],['is_multiline','Multiline']];
+      meta.innerHTML=keys.map(function(k){return '<div class="v26-meta-item"><div class="v26-meta-key">'+escHtml(k[1])+'</div><div class="v26-meta-val mono">'+escHtml(r[k[0]])+'</div></div>'}).join('');
+    }
+    var msg=byId('v26-modal-message'); if(msg) msg.textContent=safe(r.message);
+    var trace=r.trace||r.event, relSec=byId('v26-related-section'), relList=byId('v26-related-list'), relCount=byId('v26-related-count');
+    if(relSec && relList && trace){
+      var related=rows.map(function(x,i){return {x:x,i:i}}).filter(function(o){return (o.x.trace||o.x.event)===trace});
+      if(related.length>1){
+        relSec.style.display=''; if(relCount) relCount.textContent='('+related.length+' logs)';
+        relList.innerHTML=related.map(function(o){return '<div class="v26-related-row'+(o.i===idx?' current-row':'')+'" onclick="openLogModal('+o.i+')"><span>'+escHtml(o.x.time)+'</span><span><span class="badge">'+escHtml(o.x.level)+'</span></span><span>'+escHtml(o.x.app)+'</span><span class="mono">'+escHtml(String(o.x.message||'').slice(0,220))+'</span></div>'}).join('');
+      }else{relSec.style.display='none'}
+    }else if(relSec){relSec.style.display='none'}
+    var modal=byId('log-modal'); if(modal){modal.classList.add('active'); document.body.style.overflow='hidden';}
+    if(body) body.scrollTop=0;
+  };
+  window.closeLogModal=function(){var modal=byId('log-modal'); if(modal) modal.classList.remove('active'); document.body.style.overflow='';};
+  window.v26CopyLog=function(){try{navigator.clipboard.writeText(window._currentLogText||'')}catch(e){}};
+  window.v26NavLog=function(step){var i=Number(window.__currentLogIndex||0)+Number(step||0); if(i>=0 && i<allRows().length) window.openLogModal(i)};
+  document.addEventListener('keydown',function(e){if(e.key==='Escape') window.closeLogModal();});
+})();
+</script>
