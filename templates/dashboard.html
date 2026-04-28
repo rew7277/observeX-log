@@ -36,7 +36,178 @@
 <div id="shell" class="app-shell"><aside class="sidebar"><button class="btn btn-ghost sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar / icon mode">☰</button><div class="brand"><div class="brand-logo" style="font-weight:900">OX</div><div><div class="brand-name">ObserveX</div><div class="brand-sub">Log Intelligence</div></div></div><div class="nav-section">Operate</div><a class="nav-link active" data-title="Dashboard" onclick="showSection('dashboard',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="15" width="7" height="6"/></svg></span><span class="nav-text">Dashboard</span></a><a class="nav-link" data-title="Log Search" onclick="showSection('logs',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span><span class="nav-text">Log Search</span></a><a class="nav-link" data-title="System Map" onclick="showSection('flow',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.7 10.8 15.4 7.2M8.7 13.2l6.7 3.6"/></svg></span><span class="nav-text">System Map</span></a><a class="nav-link" onclick="showSection('compare',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17h4l2-10 4 10 2-6h4"/><path d="M4 21h16"/></svg></span><span class="nav-text">Change Impact</span></a><div class="nav-section">Reliability</div><a class="nav-link" onclick="showSection('onboarding',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 8a5 5 0 0 1 10 0"/><path d="M7 16a5 5 0 0 0 10 0"/></svg></span><span class="nav-text">Onboarding</span></a><a class="nav-link" onclick="showSection('health',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-5"/></svg></span><span class="nav-text">Source Health</span></a><a class="nav-link" onclick="showSection('performance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span><span class="nav-text">Performance</span></a><a class="nav-link" onclick="showSection('customdash',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15v2M12 11v6M17 8v9"/></svg></span><span class="nav-text">Custom Dashboards</span></a><a class="nav-link" onclick="showSection('incidents',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10.3 3.7 2.6 18a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></span><span class="nav-text">Incidents</span></a><a class="nav-link" onclick="showSection('metrics',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="5"/><rect x="12" y="7" width="3" height="9"/><rect x="17" y="9" width="3" height="7"/></svg></span><span class="nav-text">Log Metrics</span></a><div class="nav-section">Setup</div><a class="nav-link" onclick="showSection('api',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span><span class="nav-text">API Ingestion</span></a><a class="nav-link" onclick="showSection('alerts',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><span class="nav-text">Alerts</span></a><a class="nav-link" onclick="showSection('connectors',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-text">Connectors</span></a><a class="nav-link" onclick="showSection('marketplace',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 9h18l-1 12H4L3 9Z"/><path d="M8 9V6a4 4 0 0 1 8 0v3"/></svg></span><span class="nav-text">Marketplace</span></a><a class="nav-link" onclick="showSection('billing',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg></span><span class="nav-text">Billing & Usage</span></a><a class="nav-link" onclick="showSection('compliance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9.5 12.5 1.8 1.8 3.7-4"/></svg></span><span class="nav-text">Compliance</span></a><a class="nav-link" onclick="showSection('history',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span><span class="nav-text">Upload History</span></a><a class="nav-link" data-title="Settings" onclick="showSection('settings',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1 1.64V21a2 2 0 1 1-4 0v-.08a1.8 1.8 0 0 0-1-1.64 1.8 1.8 0 0 0-2 .36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.64-1H3a2 2 0 1 1 0-4h.08a1.8 1.8 0 0 0 1.64-1 1.8 1.8 0 0 0-.36-2l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05a1.8 1.8 0 0 0 2 .36H9.3A1.8 1.8 0 0 0 10 2.08V2a2 2 0 1 1 4 0v.08a1.8 1.8 0 0 0 1 1.64h.09a1.8 1.8 0 0 0 2-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 2v.09A1.8 1.8 0 0 0 20.92 10H21a2 2 0 1 1 0 4h-.08a1.8 1.8 0 0 0-1.52 1Z"/></svg></span><span class="nav-text">Settings</span></a><div class="sidebar-footer"><div class="user-chip"><div class="avatar">{{ user.name[0].upper() if user.name else "U" }}</div><div><div class="user-name">{{ user.name }}</div><a href="{{ url_for('logout') }}" style="font-size:11px;color:var(--tx3)">Sign out</a></div></div></div></aside><button class="sidebar-edge-toggle" onclick="toggleSidebar()" title="Collapse / expand sidebar">‹</button>
 <main class="main">
 <section id="sec-dashboard" class="section-panel"><div class="hero"><h1 style="font-size:28px;color:#fff">Dashboard</h1><p style="color:rgba(255,255,255,.82);max-width:850px">Control room for uploaded/API/S3 logs. All insights below are generated from ingested data only — no hardcoded app, dependency, or tag names.</p><div class="top-controls"><select id="env" class="select-styled env-select" style="width:220px">{% for e in environments %}<option>{{e}}</option>{% endfor %}</select><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="copyReport()">Copy RCA</button><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="loadDemo()">Load Demo</button><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="shareCurrentReport()">Share Report</button></div></div><div class="lite-grid"><div class="kpi"><b id="m-total">0</b><span>Lines</span></div><div class="kpi"><b id="m-errors" class="pill-error">0</b><span>Errors</span></div><div class="kpi"><b id="m-warns" class="pill-warn">0</b><span>Warnings</span></div><div class="kpi"><b id="m-latency">0ms</b><span>Avg latency</span></div><div class="kpi"><b id="m-apps">0</b><span>Apps</span></div><div class="kpi"><b id="m-score" class="pill-ok">100</b><span>Health</span></div></div><div class="dashboard-extra-grid"><div class="metric-tile"><small>Error rate</small><b id="m-error-rate">0%</b><span>Failures against total log volume</span></div><div class="metric-tile"><small>Success rate</small><b id="m-success-rate">0%</b><span>Success/OK signals detected</span></div><div class="metric-tile"><small>Throughput</small><b id="m-throughput">0/min</b><span>Log events per active minute</span></div><div class="metric-tile"><small>Trace coverage</small><b id="m-traces">0</b><span>Unique event/trace IDs</span></div><div class="metric-tile"><small>Affected APIs</small><b id="m-apis">0</b><span>Endpoints or flows with signal</span></div><div class="metric-tile"><small>P95 latency</small><b id="m-p95">0ms</b><span>Slow-tail response indicator</span></div><div class="metric-tile"><small>Ingestion sources</small><b id="m-sources">0</b><span>Files/API/S3 sources analysed</span></div><div class="metric-tile"><small>Anomaly signal</small><b id="m-anomaly">Normal</b><span>Baseline and spike detection</span></div></div><div class="dashboard-note"><b>How to read this dashboard:</b> every metric is calculated from the currently active uploaded/API/S3 dataset. Use the app/API cards below to see exactly which service, endpoint, flow, or file is driving the numbers.</div><div class="dashboard-viz-grid"><div class="viz-panel"><h3>Traffic trend by time</h3><div class="viz-sub">Each bar is a time bucket from the active dataset. Hover bars to see the dominant API/endpoint, logs, errors and warnings for that minute.</div><div id="dash-trend" class="trend-chart"></div><div class="trend-legend"><span><i class="legend-dot" style="background:#818cf8"></i>Total traffic</span><span><i class="legend-dot" style="background:#fbbf24"></i>Warnings</span><span><i class="legend-dot" style="background:#fb7185"></i>Errors/failures</span></div><div id="trend-caption" class="chart-caption">Upload logs to see which app/API is contributing to traffic and failures.</div><div id="endpoint-trend" class="endpoint-trend-list"></div></div><div class="viz-panel"><h3>Service health mix</h3><div class="viz-sub">Health split across success, warning and failure signals in the active dataset.</div><div class="donut-wrap"><div id="health-donut" class="donut"><div class="donut-inner"><div><b id="donut-score">100</b><small style="display:block;color:var(--tx3)">health</small></div></div></div><div id="health-breakdown" class="health-list"></div></div><div id="health-caption" class="chart-caption">Upload logs to see the main application/API behind the health score.</div></div></div><div class="dashboard-context-grid"><div class="context-panel"><h3>Top APIs / flows causing signal</h3><div class="viz-sub">Ranked by volume and failure/warning signal. This answers “which API?” directly.</div><div id="api-breakdown"><div class="empty-dash-msg">No API or flow data yet.</div></div></div><div class="context-panel"><h3>Active dataset scope</h3><div class="viz-sub">Shows the exact app, file source and trace coverage behind dashboard numbers.</div><div id="scope-summary" class="scope-grid"></div></div></div><div class="signal-grid"><div class="signal-card"><small>MTTR risk</small><b id="m-mttr-risk">Low</b><span>Based on active error clusters</span></div><div class="signal-card"><small>Noise ratio</small><b id="m-noise">0%</b><span>Warnings/info vs actionable events</span></div><div class="signal-card"><small>RCA confidence</small><b id="m-rca-conf">0%</b><span>Trace + failure + context strength</span></div><div class="signal-card"><small>Data freshness</small><b id="m-freshness">—</b><span>Latest ingested log timestamp</span></div></div><div class="insight"><div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap"><div><div style="font-size:11px;color:var(--tx3);font-weight:800;text-transform:uppercase">Root-cause hypothesis</div><h2 id="root-cause" style="margin-top:4px">Upload logs to generate an incident summary.</h2><p id="deploy-recommendation" style="color:var(--tx2);font-size:13px;margin-top:4px">The system will guide you from signal → trace → dependency → decision.</p></div><button class="btn btn-primary" onclick="showSection('logs',event);openTopTrace()">Start guided debugging</button></div></div><div id="action-cards" class="actions-grid"></div><div class="two"><div class="card"><h3>Incident Severity</h3><div id="severity-card" class="node-card">Upload logs to calculate severity.</div></div><div class="card"><h3>Schema Detection & RCA Evidence</h3><div id="schema-card" class="node-card">Waiting for logs.</div><div id="explain-card" style="margin-top:8px;color:var(--tx2);font-size:13px">—</div></div></div><div class="split"><div class="card"><div class="tabs"><button class="tab-btn active" onclick="switchTab('drop-tab',this)">Drag & Drop</button><button class="tab-btn" onclick="switchTab('paste-tab',this)">Paste Logs</button></div><div id="drop-tab" class="tab-panel active"><div id="drop-zone" class="drop-zone" onclick="document.getElementById('fileInput').click()"><div class="drop-icon">⬆</div><h4>Upload logs</h4><p>Drop .log, .txt or .json files. Multiple uploads are accumulated. Limit: 500 MB per request.</p><input id="fileInput" type="file" multiple accept=".log,.txt,.json" style="display:none"></div><div id="upload-status" style="margin-top:10px;font-size:12px;color:var(--tx3)">Choose environment, then upload.</div><div class="progress" style="margin-top:10px"><span id="upload-progress"></span></div><div id="upload-list" class="upload-list"></div></div><div id="paste-tab" class="tab-panel"><textarea id="paste-area" class="input mono" rows="8" placeholder="Paste logs…"></textarea><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="analysePaste()">Analyse</button></div></div><div class="card"><h3>⚡ Findings</h3><div id="findings"><div class="finding-row"><span>No logs analysed yet</span><span class="badge badge-info">READY</span></div></div><h3 style="margin-top:18px">🏷 Smart Tags</h3><div id="smart-tags" style="color:var(--tx3)">—</div></div></div><div class="three"><div class="card"><h3>Top Error Clusters</h3><div id="top-errors" style="color:var(--tx3)">No error clusters yet.</div></div><div class="card"><h3>Guided Debugging</h3><div id="guided-steps"><div class="debug-step" data-step="1">Upload logs to generate a path.</div></div></div><div class="card"><h3>Recommended Next Steps</h3><div id="next-steps" style="color:var(--tx3)">Upload logs to get next steps.</div></div></div></section>
-<section id="sec-logs" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔎 Log Search</div><div class="page-sub">Search uploaded, API, or S3-ingested logs. Click any row for complete multiline log details.</div></div><div class="card"><div class="toolbar"><div><label class="lbl">Env</label><select id="filter-env" class="select-styled env-select"><option value="">All Envs</option>{% for e in environments %}<option>{{e}}</option>{% endfor %}</select></div><div><label class="lbl">File</label><select id="filter-file" class="select-styled"><option value="">All Files</option></select></div><div><label class="lbl">App</label><select id="filter-app" class="select-styled"><option value="">All Apps</option></select></div><div><label class="lbl">Level</label><select id="filter-level" class="select-styled"><option value="">All Levels</option><option>INFO</option><option>DEBUG</option><option>WARN</option><option>ERROR</option><option>SUCCESS</option><option>FAILURE</option></select></div><div><label class="lbl">From Date</label><input id="from-date" type="date" class="input"></div><div><label class="lbl">To Date</label><input id="to-date" type="date" class="input"></div><div><label class="lbl">From Time</label><input id="from-time" type="time" class="input"></div><div><label class="lbl">To Time</label><input id="to-time" type="time" class="input"></div><div><label class="lbl">Search</label><input id="filter-q" class="input" placeholder="trace/event/message"></div><button class="btn btn-primary" onclick="applyClientSearch()">Search</button><button class="btn btn-ghost" onclick="clearLogFilters()">Clear</button></div><div style="margin-top:12px"><span class="chip" onclick="quickLevel('INFO')">Info</span><span class="chip" onclick="quickLevel('DEBUG')">Debug</span><span class="chip" onclick="quickLevel('ERROR')">Error</span><span class="chip" onclick="quickLevel('SUCCESS')">Success</span><span class="chip" onclick="quickLevel('FAILURE')">Failure</span><span class="chip" onclick="quickSearch('trace')">Has trace</span></div><div style="margin-top:12px" class="ql-help"><span class="chip">Query language:</span><span class="chip" onclick="setQueryExample('env=SANDBOX app=demo-checkout-api level=ERROR')">env=SANDBOX app=demo-checkout-api level=ERROR</span><span class="chip" onclick="setQueryExample('trace=1-50953fa0')">trace=1-50953fa0</span><button class="btn btn-ghost btn-sm" onclick="saveCurrentSearch()">Save Search</button><button class="btn btn-ghost btn-sm" onclick="loadSavedSearches()">Saved Searches</button></div><div id="saved-searches-box" style="margin-top:10px;color:var(--tx2)"></div></div><div class="card" style="margin-top:14px"><h3>🚀 Trace Explorer</h3><div class="toolbar" style="margin-top:8px"><input id="trace-q" class="input mono" placeholder="Enter / click trace or event ID"><button class="btn btn-primary" onclick="openTrace()">Open Trace</button><button class="btn btn-ghost" onclick="clearTrace()">Clear Trace</button></div><div id="trace-explain" class="insight" style="display:none"></div><div id="trace-inline"></div></div><div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>All Logs</h3><button class="btn btn-ghost btn-sm" onclick="exportCsv()">Export CSV</button></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Env</th><th>Level</th><th>App</th><th>Trace/Event</th><th>Flow</th><th>Message</th></tr></thead><tbody id="logs-tbody"><tr><td colspan="7" style="text-align:center;color:var(--tx3)">No logs uploaded.</td></tr></tbody></table></div></div></section>
+<section id="sec-logs" class="section-panel" style="display:none">
+<div class="page-header"><div class="page-title">🔎 Log Search</div><div class="page-sub">Search uploaded, API, or S3-ingested logs. Click any row to open full log details in a centred popup.</div></div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     v26 ADVANCED FILTER PANEL
+═══════════════════════════════════════════════════════════════ -->
+<div class="v26-filter-shell">
+
+  <!-- Row 1: Dropdowns -->
+  <div class="v26-filter-row">
+    <div class="v26-filter-group">
+      <label class="v26-label">🌐 Environment</label>
+      <div class="v26-select-wrap">
+        <select id="filter-env" class="v26-select env-select">
+          <option value="">All Envs</option>
+          {% for e in environments %}<option>{{e}}</option>{% endfor %}
+        </select>
+        <span class="v26-select-icon">▾</span>
+      </div>
+    </div>
+    <div class="v26-filter-group">
+      <label class="v26-label">📁 File</label>
+      <div class="v26-select-wrap">
+        <select id="filter-file" class="v26-select">
+          <option value="">All Files</option>
+        </select>
+        <span class="v26-select-icon">▾</span>
+      </div>
+    </div>
+    <div class="v26-filter-group">
+      <label class="v26-label">⚙ App / API</label>
+      <div class="v26-select-wrap">
+        <select id="filter-app" class="v26-select">
+          <option value="">All Apps</option>
+        </select>
+        <span class="v26-select-icon">▾</span>
+      </div>
+    </div>
+    <div class="v26-filter-group">
+      <label class="v26-label">🔔 Level</label>
+      <div class="v26-level-pills" id="v26-level-pills">
+        <button class="v26-lp v26-lp-all active" onclick="v26SetLevel('')">All</button>
+        <button class="v26-lp v26-lp-info"    onclick="v26SetLevel('INFO')">INFO</button>
+        <button class="v26-lp v26-lp-debug"   onclick="v26SetLevel('DEBUG')">DEBUG</button>
+        <button class="v26-lp v26-lp-warn"    onclick="v26SetLevel('WARN')">WARN</button>
+        <button class="v26-lp v26-lp-error"   onclick="v26SetLevel('ERROR')">ERROR</button>
+        <button class="v26-lp v26-lp-success" onclick="v26SetLevel('SUCCESS')">SUCCESS</button>
+        <button class="v26-lp v26-lp-failure" onclick="v26SetLevel('FAILURE')">FAILURE</button>
+      </div>
+      <!-- hidden select kept for backward compat -->
+      <select id="filter-level" style="display:none">
+        <option value="">All Levels</option>
+        <option>INFO</option><option>DEBUG</option><option>WARN</option>
+        <option>ERROR</option><option>SUCCESS</option><option>FAILURE</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Row 2: Date / Time range + search bar -->
+  <div class="v26-filter-row v26-filter-row2">
+    <div class="v26-filter-group v26-fg-dt">
+      <label class="v26-label">📅 From</label>
+      <div class="v26-dt-pair">
+        <input id="from-date" type="date" class="v26-input">
+        <input id="from-time" type="time" class="v26-input v26-input-sm">
+      </div>
+    </div>
+    <div class="v26-filter-group v26-fg-dt">
+      <label class="v26-label">📅 To</label>
+      <div class="v26-dt-pair">
+        <input id="to-date" type="date" class="v26-input">
+        <input id="to-time" type="time" class="v26-input v26-input-sm">
+      </div>
+    </div>
+    <div class="v26-quick-range">
+      <button class="v26-qr" onclick="v26QuickRange(15)">15m</button>
+      <button class="v26-qr" onclick="v26QuickRange(60)">1h</button>
+      <button class="v26-qr" onclick="v26QuickRange(360)">6h</button>
+      <button class="v26-qr" onclick="v26QuickRange(1440)">24h</button>
+      <button class="v26-qr" onclick="v26QuickRange(10080)">7d</button>
+    </div>
+    <div class="v26-filter-group v26-fg-search">
+      <label class="v26-label">🔍 Search</label>
+      <div class="v26-search-wrap">
+        <input id="filter-q" class="v26-search-input" placeholder="trace / event / message keyword…" oninput="v26LiveSearch()" onkeydown="if(event.key==='Enter')applyClientSearch()">
+        <button class="v26-search-btn" onclick="applyClientSearch()">Search</button>
+        <button class="v26-clear-btn" onclick="clearLogFilters()">✕ Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: Quick chips + query bar + saved searches -->
+  <div class="v26-filter-row v26-filter-row3">
+    <div class="v26-chips-zone">
+      <span class="v26-chip-label">Quick filters:</span>
+      <button class="v26-chip" onclick="quickLevel('INFO')">ℹ Info</button>
+      <button class="v26-chip v26-chip-warn" onclick="quickLevel('WARN')">⚠ Warn</button>
+      <button class="v26-chip v26-chip-error" onclick="quickLevel('ERROR')">✖ Error</button>
+      <button class="v26-chip v26-chip-success" onclick="quickLevel('SUCCESS')">✔ Success</button>
+      <button class="v26-chip v26-chip-failure" onclick="quickLevel('FAILURE')">✖ Failure</button>
+      <button class="v26-chip" onclick="quickSearch('trace')">🔗 Has Trace</button>
+      <button class="v26-chip" onclick="v26FilterErrors()">🔥 Errors only</button>
+      <button class="v26-chip" onclick="v26Last100()">⏱ Last 100</button>
+    </div>
+    <div class="v26-ql-zone">
+      <span class="v26-chip-label">Query:</span>
+      <input id="v26-ql" class="v26-ql-input" placeholder="env=PROD level=ERROR app=my-api trace=abc123" onkeydown="if(event.key==='Enter')v26RunQuery()">
+      <button class="v26-ql-run" onclick="v26RunQuery()">Run</button>
+      <button class="v26-chip" onclick="v26SetQueryExample('env=SANDBOX app=demo-checkout-api level=ERROR')">Example 1</button>
+      <button class="v26-chip" onclick="v26SetQueryExample('trace=1-50953fa0')">Example 2</button>
+    </div>
+    <div class="v26-save-zone">
+      <button class="v26-save-btn" onclick="saveCurrentSearch()">💾 Save Search</button>
+      <button class="v26-save-btn" onclick="loadSavedSearches()">📂 Saved</button>
+    </div>
+  </div>
+
+  <!-- Active filter badges -->
+  <div id="v26-active-filters" class="v26-active-filters"></div>
+  <div id="saved-searches-box" style="margin-top:8px;color:var(--tx2)"></div>
+
+  <!-- Result count bar -->
+  <div class="v26-result-bar">
+    <span id="v26-result-count" class="v26-result-count">—</span>
+    <div class="v26-result-actions">
+      <button class="v26-chip" onclick="exportCsv()">⬇ Export CSV</button>
+      <button class="v26-chip" onclick="v26CopyVisible()">📋 Copy visible</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trace Explorer -->
+<div class="card" style="margin-top:14px">
+  <h3>🚀 Trace Explorer</h3>
+  <div class="toolbar" style="margin-top:8px">
+    <input id="trace-q" class="input mono" placeholder="Enter / click trace or event ID" style="flex:1">
+    <button class="btn btn-primary" onclick="openTrace()">Open Trace</button>
+    <button class="btn btn-ghost" onclick="clearTrace()">Clear Trace</button>
+  </div>
+  <div id="trace-explain" class="insight" style="display:none"></div>
+  <div id="trace-inline"></div>
+</div>
+
+<!-- Logs table -->
+<div class="card" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <h3>All Logs</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="v26-table-count" style="font-size:13px;color:var(--tx3)"></span>
+      <button class="btn btn-ghost btn-sm" onclick="exportCsv()">Export CSV</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="min-width:140px">Time</th>
+          <th>Env</th>
+          <th>Level</th>
+          <th>App</th>
+          <th>Trace/Event</th>
+          <th>Flow</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody id="logs-tbody">
+        <tr><td colspan="7" style="text-align:center;color:var(--tx3)">No logs uploaded.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</section>
 <section id="sec-flow" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔀 System Map</div><div class="page-sub">Dynamic dependency map, bottleneck view, API health, and trace frequency from the current dataset.</div></div><div class="card"><h3>Request Path</h3><div id="flow-diagram">Upload logs to render flow.</div></div><div class="system-grid" style="margin-top:14px"><div class="card"><h3>API / Flow Health</h3><div id="app-health">—</div></div><div class="card"><h3>Error Timeline</h3><div id="error-timeline" class="mini-bars">—</div></div><div class="card"><h3>Dependencies / External Signals</h3><div id="deps">—</div></div><div class="card"><h3>Advanced Hints</h3><div id="flow-hints">—</div></div><div class="card"><h3>Business Signals</h3><div id="business-signals">Checkout/API/business metrics appear here from parsed payload keys.</div></div><div class="card"><h3>Security Signals</h3><div id="security-signals">PII and secrets are masked before display/export.</div></div></div></section>
 
 <section id="sec-onboarding" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🧭 Onboarding Wizard</div><div class="page-sub">Guide customers from first login to first RCA.</div></div><div class="three"><div class="card"><h3>1. Try Demo Mode</h3><p style="color:var(--tx2)">Load a sample incident to understand the product without real logs.</p><button class="btn btn-primary" onclick="loadDemo();showSection('dashboard',event)">Load demo incident</button></div><div class="card"><h3>2. Ingest Logs</h3><p style="color:var(--tx2)">Upload a file, paste logs, connect S3, or send logs to API.</p><button class="btn btn-ghost" onclick="showSection('api',event)">View API setup</button></div><div class="card"><h3>3. Share RCA</h3><p style="color:var(--tx2)">Generate a masked RCA report with expiring link.</p><button class="btn btn-ghost" onclick="shareCurrentReport()">Create safe link</button></div></div><div class="card" style="margin-top:14px"><h3>Progress</h3><div id="onboarding-steps">Loading...</div></div></section>
@@ -87,7 +258,38 @@ customerDOB
 internalSecret"></textarea><div style="display:grid;gap:10px;min-width:220px"><button class="btn btn-primary" onclick="saveCustomMaskKeys()">Save Masking Rules</button><button class="btn btn-ghost" onclick="resetCustomMaskKeys()">Reset</button><button class="btn btn-ghost" onclick="testCustomMasking()">Test Rules</button></div></div><div id="custom-mask-status" class="node-card" style="margin-top:12px">Custom masking is loaded from this browser. Backend persistence can be connected later for Enterprise tenants.</div></div>
 <div class="card" style="margin-top:14px"><h3>Security & Masking</h3><p style="color:var(--tx2)">ObserveX masks JWTs, bearer tokens, API keys, Aadhaar, PAN, mobile numbers, emails, customer names, loan/account/customer/checkout IDs, BBPS IDs, UPI/VPA and common secrets before rendering logs, exporting CSV, storing volume copies, or returning API responses.</p><p style="color:var(--tx3);font-size:12px">For production SaaS: store only masked logs by default; allow encrypted raw retention only as an enterprise admin setting.</p></div></section>
 </main></div>
-<div id="log-modal" class="modal"><div class="modal-card"><div style="display:flex;justify-content:space-between;gap:10px"><h2>Complete Log Detail</h2><div><button class="btn btn-ghost btn-sm" onclick="copyCurrentLog()">Copy Full Log</button><button class="btn btn-danger btn-sm" onclick="closeLogModal()">Close</button></div></div><div id="log-detail"></div></div></div>
+<div id="log-modal" class="v26-modal" onclick="if(event.target===this)closeLogModal()">
+  <div class="v26-modal-card" id="v26-modal-inner">
+    <!-- Header -->
+    <div class="v26-modal-header">
+      <div class="v26-modal-title">
+        <span id="v26-modal-level-badge" class="v26-modal-badge"></span>
+        <span id="v26-modal-app" style="font-size:17px;color:#a5b4fc;font-weight:700"></span>
+        <span style="color:var(--tx3);font-size:14px;margin-left:6px" id="v26-modal-time"></span>
+      </div>
+      <div class="v26-modal-actions">
+        <button class="v26-modal-btn" onclick="v26CopyLog()" title="Copy full log text">📋 Copy</button>
+        <button class="v26-modal-btn" onclick="v26OpenTraceFromModal()" title="Open trace in Trace Explorer">🔗 Trace</button>
+        <button class="v26-modal-btn v26-modal-btn-prev" onclick="v26NavLog(-1)" title="Previous log">‹ Prev</button>
+        <button class="v26-modal-btn v26-modal-btn-next" onclick="v26NavLog(1)"  title="Next log">Next ›</button>
+        <button class="v26-modal-close" onclick="closeLogModal()" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <!-- Meta grid -->
+    <div class="v26-meta-grid" id="v26-meta-grid"></div>
+    <!-- Message -->
+    <div class="v26-modal-section">
+      <div class="v26-modal-section-label">📄 Full Message</div>
+      <pre class="v26-message-pre" id="v26-modal-message"></pre>
+    </div>
+    <!-- Related logs (same trace) -->
+    <div class="v26-modal-section" id="v26-related-section" style="display:none">
+      <div class="v26-modal-section-label">🔗 Related logs in this trace <span id="v26-related-count" style="color:var(--tx3);font-weight:400;font-size:13px"></span></div>
+      <div id="v26-related-list" class="v26-related-list"></div>
+    </div>
+    <div id="log-detail" style="display:none"></div>
+  </div>
+</div>
 <script>
 let _allRows=[],_visibleRows=[],_lastResult=null,_sessions=[],_environments={{ environments|tojson }};
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const badge=l=>l==='ERROR'||l==='FAILURE'?'badge-error':l==='WARN'?'badge-warn':l==='SUCCESS'?'badge-ok':'badge-info';
@@ -819,6 +1021,372 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   }else{
     setTimeout(boot,1600);
   }
+
+})();
+</script>
+<style id="observex-v26-styles">
+/* ═══════════════════════════════════════════════════════
+   v26 — Log Search Advanced Filter Panel + Modal
+═══════════════════════════════════════════════════════ */
+
+/* ── Filter Shell ── */
+.v26-filter-shell{background:linear-gradient(135deg,rgba(20,20,45,.92),rgba(14,14,35,.96));border:1px solid rgba(139,92,246,.3);border-radius:24px;padding:22px 24px 16px;margin-bottom:16px;box-shadow:0 24px 64px rgba(0,0,0,.35)}
+.v26-filter-row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+.v26-filter-row2{margin-bottom:14px}
+.v26-filter-row3{align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,.07);padding-top:12px;margin-bottom:8px}
+.v26-filter-group{display:flex;flex-direction:column;gap:6px;flex:1;min-width:160px}
+.v26-fg-dt{min-width:220px;flex:0 0 auto}
+.v26-fg-search{flex:2;min-width:280px}
+.v26-label{font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.1em;color:#a5b4fc}
+
+/* ── Selects ── */
+.v26-select-wrap{position:relative}
+.v26-select{width:100%;height:46px;border-radius:14px;background:rgba(10,10,28,.8);color:#fff;border:1.5px solid rgba(139,92,246,.35);padding:0 36px 0 14px;font-weight:700;font-size:14px;appearance:none;cursor:pointer;transition:border-color .18s}
+.v26-select:focus{outline:0;border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.25)}
+.v26-select-icon{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:#a78bfa;pointer-events:none;font-size:13px}
+
+/* ── Level pills ── */
+.v26-level-pills{display:flex;gap:6px;flex-wrap:wrap}
+.v26-lp{height:36px;border-radius:999px;border:1.5px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#cbd5e1;font-size:12px;font-weight:800;padding:0 13px;cursor:pointer;transition:all .16s}
+.v26-lp.active,.v26-lp:hover{transform:translateY(-1px)}
+.v26-lp-all.active{background:rgba(139,92,246,.35);border-color:#7c3aed;color:#ddd6fe}
+.v26-lp-info.active{background:rgba(99,102,241,.3);border-color:#6366f1;color:#a5b4fc}
+.v26-lp-debug.active{background:rgba(71,85,105,.4);border-color:#475569;color:#cbd5e1}
+.v26-lp-warn.active{background:rgba(245,158,11,.2);border-color:#f59e0b;color:#fde68a}
+.v26-lp-error.active{background:rgba(239,68,68,.2);border-color:#ef4444;color:#fca5a5}
+.v26-lp-success.active{background:rgba(16,185,129,.2);border-color:#10b981;color:#6ee7b7}
+.v26-lp-failure.active{background:rgba(244,63,94,.25);border-color:#f43f5e;color:#fda4af}
+
+/* ── Date/time ── */
+.v26-dt-pair{display:flex;gap:8px;align-items:center}
+.v26-input{height:46px;border-radius:14px;background:rgba(10,10,28,.8);color:#fff;border:1.5px solid rgba(139,92,246,.3);padding:0 14px;font-size:14px;font-weight:700;transition:border-color .18s;min-width:0;flex:1}
+.v26-input-sm{max-width:110px}
+.v26-input:focus{outline:0;border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.22)}
+.v26-input::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.6}
+
+/* ── Quick range buttons ── */
+.v26-quick-range{display:flex;gap:6px;align-items:flex-end;padding-bottom:0}
+.v26-qr{height:46px;border-radius:14px;border:1.5px solid rgba(139,92,246,.3);background:rgba(124,58,237,.12);color:#a5b4fc;font-size:13px;font-weight:800;padding:0 14px;cursor:pointer;transition:all .16s}
+.v26-qr:hover{background:rgba(124,58,237,.28);border-color:#7c3aed;color:#ddd6fe;transform:translateY(-1px)}
+
+/* ── Search bar ── */
+.v26-search-wrap{display:flex;gap:8px;align-items:center}
+.v26-search-input{flex:1;height:46px;border-radius:14px;background:rgba(10,10,28,.85);color:#fff;border:1.5px solid rgba(139,92,246,.3);padding:0 16px;font-size:14px;transition:border-color .18s}
+.v26-search-input:focus{outline:0;border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.22)}
+.v26-search-btn{height:46px;border-radius:14px;background:linear-gradient(135deg,#7c3aed,#6366f1);color:#fff;border:0;font-weight:900;font-size:14px;padding:0 22px;cursor:pointer;transition:opacity .16s}
+.v26-search-btn:hover{opacity:.88}
+.v26-clear-btn{height:46px;border-radius:14px;border:1.5px solid rgba(244,63,94,.35);background:rgba(244,63,94,.1);color:#fca5a5;font-weight:800;font-size:13px;padding:0 16px;cursor:pointer;transition:all .16s;white-space:nowrap}
+.v26-clear-btn:hover{background:rgba(244,63,94,.22);border-color:#f43f5e}
+
+/* ── Chips row ── */
+.v26-chips-zone,.v26-ql-zone,.v26-save-zone{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.v26-chip-label{font-size:11px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+.v26-chip{height:32px;border-radius:999px;border:1px solid rgba(148,163,184,.2);background:rgba(255,255,255,.05);color:#94a3b8;font-size:12px;font-weight:700;padding:0 12px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.v26-chip:hover{border-color:#7c3aed;color:#ddd6fe;background:rgba(124,58,237,.18)}
+.v26-chip-warn{border-color:rgba(245,158,11,.25);color:#fde68a}
+.v26-chip-warn:hover{background:rgba(245,158,11,.15)}
+.v26-chip-error{border-color:rgba(239,68,68,.3);color:#fca5a5}
+.v26-chip-error:hover{background:rgba(239,68,68,.15)}
+.v26-chip-success{border-color:rgba(16,185,129,.3);color:#6ee7b7}
+.v26-chip-success:hover{background:rgba(16,185,129,.15)}
+.v26-chip-failure{border-color:rgba(244,63,94,.3);color:#fda4af}
+.v26-chip-failure:hover{background:rgba(244,63,94,.15)}
+
+/* ── Query language input ── */
+.v26-ql-input{height:36px;border-radius:10px;background:rgba(10,10,28,.8);color:#e2e8f0;border:1.5px solid rgba(99,102,241,.3);padding:0 12px;font-family:monospace;font-size:13px;min-width:260px;flex:1}
+.v26-ql-input:focus{outline:0;border-color:#6366f1}
+.v26-ql-run{height:36px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:0;font-weight:800;font-size:13px;padding:0 16px;cursor:pointer}
+.v26-save-btn{height:36px;border-radius:10px;border:1.5px solid rgba(139,92,246,.3);background:rgba(124,58,237,.1);color:#a5b4fc;font-weight:800;font-size:13px;padding:0 14px;cursor:pointer;white-space:nowrap}
+.v26-save-btn:hover{background:rgba(124,58,237,.25)}
+
+/* ── Active filter badges ── */
+.v26-active-filters{display:flex;gap:7px;flex-wrap:wrap;min-height:0;margin-top:4px}
+.v26-af-badge{display:inline-flex;align-items:center;gap:6px;height:28px;border-radius:999px;background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);color:#a5b4fc;font-size:12px;font-weight:700;padding:0 10px}
+.v26-af-badge button{background:0;border:0;color:#f43f5e;cursor:pointer;font-size:14px;line-height:1;padding:0;margin-left:2px}
+
+/* ── Result bar ── */
+.v26-result-bar{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07)}
+.v26-result-count{font-size:14px;font-weight:700;color:#94a3b8}
+.v26-result-actions{display:flex;gap:8px}
+
+/* ════════════════════════════════════
+   v26 LOG DETAIL MODAL
+════════════════════════════════════ */
+.v26-modal{position:fixed;inset:0;background:rgba(0,0,0,.78);display:none;align-items:center;justify-content:center;z-index:9999;padding:20px;backdrop-filter:blur(6px)}
+.v26-modal.active{display:flex;animation:v26FadeIn .18s ease}
+@keyframes v26FadeIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
+.v26-modal-card{background:linear-gradient(145deg,#0f0f2a,#13132e);border:1px solid rgba(139,92,246,.4);border-radius:24px;width:min(1080px,96vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 40px 120px rgba(0,0,0,.7),0 0 0 1px rgba(139,92,246,.15)}
+.v26-modal-header{display:flex;justify-content:space-between;align-items:center;padding:18px 22px 14px;border-bottom:1px solid rgba(255,255,255,.08);gap:12px;flex-wrap:wrap;background:rgba(124,58,237,.08)}
+.v26-modal-title{display:flex;align-items:center;gap:10px;flex:1;flex-wrap:wrap}
+.v26-modal-badge{display:inline-flex;height:26px;border-radius:999px;padding:0 12px;align-items:center;font-size:12px;font-weight:900;letter-spacing:.05em}
+.v26-modal-badge.ERROR,.v26-modal-badge.FAILURE{background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.4);color:#fca5a5}
+.v26-modal-badge.WARN{background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.35);color:#fde68a}
+.v26-modal-badge.SUCCESS{background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.35);color:#6ee7b7}
+.v26-modal-badge.INFO{background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.35);color:#a5b4fc}
+.v26-modal-badge.DEBUG{background:rgba(71,85,105,.25);border:1px solid rgba(71,85,105,.4);color:#94a3b8}
+.v26-modal-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.v26-modal-btn{height:34px;border-radius:10px;border:1px solid rgba(148,163,184,.2);background:rgba(255,255,255,.06);color:#cbd5e1;font-size:13px;font-weight:700;padding:0 13px;cursor:pointer;transition:all .14s;white-space:nowrap}
+.v26-modal-btn:hover{border-color:#7c3aed;background:rgba(124,58,237,.22);color:#ddd6fe}
+.v26-modal-close{width:34px;height:34px;border-radius:999px;border:1px solid rgba(244,63,94,.35);background:rgba(244,63,94,.1);color:#fca5a5;font-size:16px;font-weight:900;cursor:pointer;transition:all .14s;display:grid;place-items:center}
+.v26-modal-close:hover{background:rgba(244,63,94,.25);border-color:#f43f5e}
+.v26-meta-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:16px 22px;background:rgba(0,0,0,.18);border-bottom:1px solid rgba(255,255,255,.06)}
+@media(max-width:860px){.v26-meta-grid{grid-template-columns:repeat(2,1fr)}}
+.v26-meta-item{display:flex;flex-direction:column;gap:3px}
+.v26-meta-key{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.1em;color:#64748b}
+.v26-meta-val{font-size:14px;font-weight:700;color:#e2e8f0;word-break:break-all}
+.v26-meta-val.mono{font-family:monospace;font-size:13px}
+.v26-modal-body{flex:1;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:16px}
+.v26-modal-section{display:flex;flex-direction:column;gap:8px}
+.v26-modal-section-label{font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.09em;color:#6366f1}
+.v26-message-pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.3);border:1px solid rgba(99,102,241,.2);border-radius:14px;padding:16px 18px;font-family:monospace;font-size:13px;color:#e2e8f0;line-height:1.7;max-height:320px;overflow-y:auto;margin:0}
+.v26-related-list{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto}
+.v26-related-row{display:grid;grid-template-columns:140px 70px 140px 1fr;gap:10px;align-items:center;padding:9px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.12);background:rgba(15,15,40,.5);cursor:pointer;font-size:12px;transition:border-color .15s}
+.v26-related-row:hover{border-color:#7c3aed;background:rgba(124,58,237,.12)}
+.v26-related-row.current-row{border-color:#6366f1;background:rgba(99,102,241,.12)}
+</style>
+
+<script id="observex-v26-js">
+/* ═══════════════════════════════════════════════════════
+   v26 — Log Search UX + Centered Log Modal
+═══════════════════════════════════════════════════════ */
+(function(){
+  'use strict';
+  var _modalIdx=null;
+
+  /* ── helpers ── */
+  function esc(s){return String(s??'').replace(/[&<>'"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c];});}
+  function rows(){return Array.isArray(window._allRows)?window._allRows:[];}
+  function el(id){return document.getElementById(id);}
+  function getVal(id){return(el(id)||{}).value||'';}
+
+  /* ── Level pill toggle ── */
+  window.v26SetLevel=function(level){
+    document.querySelectorAll('.v26-lp').forEach(function(b){b.classList.remove('active');});
+    var active=document.querySelector('.v26-lp-'+(level?level.toLowerCase():'all'));
+    if(active)active.classList.add('active');
+    var sel=el('filter-level');if(sel)sel.value=level;
+    applyClientSearch();
+  };
+
+  /* ── Quick range ── */
+  window.v26QuickRange=function(mins){
+    var times=rows().map(function(r){var n=Date.parse(String(r.time||'').replace(',',' ').replace(' ','T'));return isNaN(n)?null:n;}).filter(function(x){return x!==null;});
+    if(!times.length)return;
+    var end=Math.max.apply(null,times),start=end-mins*60000;
+    var p=function(n){return String(n).padStart(2,'0');};
+    var sf=new Date(start),ef=new Date(end);
+    if(el('from-date'))el('from-date').value=sf.getFullYear()+'-'+p(sf.getMonth()+1)+'-'+p(sf.getDate());
+    if(el('from-time'))el('from-time').value=p(sf.getHours())+':'+p(sf.getMinutes());
+    if(el('to-date'))el('to-date').value=ef.getFullYear()+'-'+p(ef.getMonth()+1)+'-'+p(ef.getDate());
+    if(el('to-time'))el('to-time').value=p(ef.getHours())+':'+p(ef.getMinutes());
+    applyClientSearch();
+  };
+
+  /* ── Active filter badges ── */
+  function renderActiveBadges(){
+    var badges=[];
+    var env=getVal('filter-env'),file=getVal('filter-file'),app=getVal('filter-app'),level=getVal('filter-level');
+    var fd=getVal('from-date'),td=getVal('to-date'),q=getVal('filter-q');
+    if(env)badges.push({label:'Env: '+env,clear:function(){if(el('filter-env'))el('filter-env').value='';applyClientSearch();}});
+    if(file)badges.push({label:'File: '+file.split('/').pop(),clear:function(){if(el('filter-file'))el('filter-file').value='';applyClientSearch();}});
+    if(app)badges.push({label:'App: '+app,clear:function(){if(el('filter-app'))el('filter-app').value='';applyClientSearch();}});
+    if(level)badges.push({label:'Level: '+level,clear:function(){v26SetLevel('');}});
+    if(fd)badges.push({label:'From: '+fd,clear:function(){if(el('from-date'))el('from-date').value='';if(el('from-time'))el('from-time').value='';applyClientSearch();}});
+    if(td)badges.push({label:'To: '+td,clear:function(){if(el('to-date'))el('to-date').value='';if(el('to-time'))el('to-time').value='';applyClientSearch();}});
+    if(q)badges.push({label:'Search: "'+q+'"',clear:function(){if(el('filter-q'))el('filter-q').value='';applyClientSearch();}});
+    var box=el('v26-active-filters');
+    if(!box)return;
+    if(!badges.length){box.innerHTML='';return;}
+    box.innerHTML=badges.map(function(b,i){return'<span class="v26-af-badge">'+esc(b.label)+'<button onclick="window._v26Clears['+i+']()" title="Remove filter">×</button></span>';}).join('');
+    window._v26Clears=badges.map(function(b){return b.clear;});
+  }
+
+  /* ── Live search (debounced) ── */
+  var _liveTimer=null;
+  window.v26LiveSearch=function(){clearTimeout(_liveTimer);_liveTimer=setTimeout(applyClientSearch,280);};
+
+  /* ── Query language parser (env=X app=Y level=Z trace=T) ── */
+  window.v26RunQuery=function(){
+    var ql=(getVal('v26-ql')||'').trim();
+    if(!ql)return;
+    var pairs={};ql.split(/\s+/).forEach(function(p){var s=p.split('=');if(s.length===2)pairs[s[0].toLowerCase()]=s[1];});
+    if(pairs.env&&el('filter-env'))el('filter-env').value=pairs.env;
+    if(pairs.app&&el('filter-app'))el('filter-app').value=pairs.app;
+    if(pairs.level&&el('filter-level')){el('filter-level').value=pairs.level.toUpperCase();v26SetLevel(pairs.level.toUpperCase());}
+    if(pairs.trace&&el('filter-q'))el('filter-q').value=pairs.trace;
+    applyClientSearch();
+  };
+  window.v26SetQueryExample=function(s){if(el('v26-ql'))el('v26-ql').value=s;};
+  window.setQueryExample=window.v26SetQueryExample;
+
+  /* ── Quick filter helpers ── */
+  window.v26FilterErrors=function(){v26SetLevel('ERROR');};
+  window.v26Last100=function(){
+    var r=rows();window.renderRows(r.slice(r.length-100));
+    var cnt=el('v26-result-count');if(cnt)cnt.textContent='Showing last 100 of '+r.length.toLocaleString()+' logs';
+  };
+
+  /* ── Copy visible rows ── */
+  window.v26CopyVisible=function(){
+    var text=(window._visibleRows||[]).map(function(r){return[r.time,r.level,r.app,r.trace||'',r.message].join('\t');}).join('\n');
+    navigator.clipboard.writeText(text).then(function(){},function(){});
+  };
+
+  /* ── Patch applyClientSearch to update badges + result counts ── */
+  var _origACS=window.applyClientSearch;
+  window.applyClientSearch=function(){
+    if(_origACS)_origACS.apply(this,arguments);
+    setTimeout(function(){
+      var n=(window._visibleRows||[]).length;
+      var cnt=el('v26-result-count');if(cnt)cnt.textContent=n.toLocaleString()+' log'+(n!==1?'s':'')+' match current filters';
+      var tc=el('v26-table-count');if(tc)tc.textContent=n.toLocaleString()+' rows';
+      renderActiveBadges();
+    },40);
+  };
+
+  /* ── Patch clearLogFilters ── */
+  var _origCLF=window.clearLogFilters;
+  window.clearLogFilters=function(){
+    if(_origCLF)_origCLF.apply(this,arguments);
+    document.querySelectorAll('.v26-lp').forEach(function(b){b.classList.remove('active');});
+    var all=document.querySelector('.v26-lp-all');if(all)all.classList.add('active');
+    if(el('v26-ql'))el('v26-ql').value='';
+    setTimeout(function(){renderActiveBadges();var cnt=el('v26-result-count');if(cnt)cnt.textContent=rows().length.toLocaleString()+' total logs';},40);
+  };
+
+  /* ═══════════════════════════════════════════════════
+     CENTERED LOG DETAIL MODAL
+  ═══════════════════════════════════════════════════ */
+  var LEVEL_CLASSES={ERROR:'ERROR',FAILURE:'FAILURE',WARN:'WARN',SUCCESS:'SUCCESS',INFO:'INFO',DEBUG:'DEBUG'};
+
+  function buildModalContent(idx){
+    var r=rows()[idx];if(!r)return;
+    _modalIdx=idx;
+    var lvl=String(r.level||'INFO').toUpperCase();
+
+    /* badge */
+    var badge=el('v26-modal-level-badge');
+    if(badge){badge.textContent=lvl;badge.className='v26-modal-badge '+(LEVEL_CLASSES[lvl]||'INFO');}
+    /* app + time */
+    var appEl=el('v26-modal-app');if(appEl)appEl.textContent=r.app||'—';
+    var timeEl=el('v26-modal-time');if(timeEl)timeEl.textContent=r.time||'';
+
+    /* meta grid */
+    var metaGrid=el('v26-meta-grid');
+    if(metaGrid){
+      var META_KEYS=[
+        {k:'time',label:'Time'},{k:'env',label:'Env'},{k:'level',label:'Level'},{k:'app',label:'App'},
+        {k:'trace',label:'Trace ID',mono:true},{k:'event',label:'Event ID',mono:true},
+        {k:'flow',label:'Flow'},{k:'status',label:'Status'},
+        {k:'latency',label:'Latency'},{k:'uploadName',label:'Source File'},
+        {k:'line_no',label:'Line #'},{k:'is_multiline',label:'Multiline'}
+      ];
+      metaGrid.innerHTML=META_KEYS.map(function(m){
+        var val=String(r[m.k]||'—');
+        return'<div class="v26-meta-item"><div class="v26-meta-key">'+esc(m.label)+'</div><div class="v26-meta-val'+(m.mono?' mono':'')+'">'+esc(val)+'</div></div>';
+      }).join('');
+    }
+
+    /* message */
+    var msgEl=el('v26-modal-message');if(msgEl)msgEl.textContent=r.message||'—';
+
+    /* related (same trace) */
+    var traceId=r.trace||r.event;
+    var relSec=el('v26-related-section');
+    var relList=el('v26-related-list');
+    var relCount=el('v26-related-count');
+    if(relSec&&relList&&traceId){
+      var related=rows().filter(function(x){return(x.trace||x.event)===traceId;});
+      if(related.length>1){
+        relSec.style.display='';
+        if(relCount)relCount.textContent='('+related.length+' logs)';
+        relList.innerHTML=related.map(function(x){
+          var xi=rows().indexOf(x);
+          return'<div class="v26-related-row'+(xi===idx?' current-row':'')+'" onclick="openLogModal('+xi+')">'
+            +'<span>'+esc(x.time||'—')+'</span>'
+            +'<span><span class="badge">'+esc(x.level||'')+'</span></span>'
+            +'<span>'+esc(x.app||'—')+'</span>'
+            +'<span class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(String(x.message||'').slice(0,180))+'</span>'
+            +'</div>';
+        }).join('');
+      }else{relSec.style.display='none';}
+    }else if(relSec){relSec.style.display='none';}
+
+    /* scroll body back to top */
+    var body=document.querySelector('.v26-modal-card');if(body)body.scrollTop=0;
+  }
+
+  /* Override openLogModal */
+  window.openLogModal=function(idx){
+    var r=rows()[idx];if(!r)return;
+    window._currentLogText=r.message||'';
+    buildModalContent(idx);
+    var modal=el('log-modal');if(modal)modal.classList.add('active');
+    /* move modal card contents into scrollable wrapper if needed */
+    var card=document.querySelector('.v26-modal-card');
+    if(card){
+      var body=card.querySelector('.v26-modal-body');
+      if(!body){
+        /* wrap all children after header+meta into a scrollable body */
+        var header=card.querySelector('.v26-modal-header');
+        var meta=el('v26-meta-grid');
+        var bodyDiv=document.createElement('div');
+        bodyDiv.className='v26-modal-body';
+        Array.from(card.children).forEach(function(c){
+          if(c!==header&&c!==meta)bodyDiv.appendChild(c);
+        });
+        card.appendChild(bodyDiv);
+      }
+    }
+  };
+
+  window.closeLogModal=function(){
+    var modal=el('log-modal');if(modal)modal.classList.remove('active');
+    _modalIdx=null;
+  };
+
+  /* Navigate prev/next */
+  window.v26NavLog=function(dir){
+    if(_modalIdx===null)return;
+    var visible=window._visibleRows||rows();
+    var curRow=rows()[_modalIdx];
+    var visIdx=visible.indexOf(curRow);
+    var next=visible[visIdx+dir];
+    if(!next)return;
+    var nextIdx=rows().indexOf(next);
+    if(nextIdx>=0)window.openLogModal(nextIdx);
+  };
+
+  /* Copy + trace from modal */
+  window.v26CopyLog=function(){navigator.clipboard.writeText(window._currentLogText||'');};
+  window.copyCurrentLog=window.v26CopyLog;
+  window.v26OpenTraceFromModal=function(){
+    var r=_modalIdx!==null?rows()[_modalIdx]:null;if(!r)return;
+    var id=r.trace||r.event;if(!id)return;
+    var tq=el('trace-q');if(tq)tq.value=id;
+    window.closeLogModal();
+    if(window.openTrace)window.openTrace();
+  };
+
+  /* Keyboard: Esc closes, arrow keys navigate */
+  document.addEventListener('keydown',function(e){
+    var modal=el('log-modal');
+    if(!modal||!modal.classList.contains('active'))return;
+    if(e.key==='Escape')window.closeLogModal();
+    if(e.key==='ArrowRight'||e.key==='ArrowDown')window.v26NavLog(1);
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp')window.v26NavLog(-1);
+  });
+
+  /* Init: update result count when renderRows is called */
+  var _origRR=window.renderRows;
+  window.renderRows=function(r){
+    if(_origRR)_origRR.apply(this,arguments);
+    setTimeout(function(){
+      var n=(window._visibleRows||[]).length;
+      var cnt=el('v26-result-count');if(cnt)cnt.textContent=n.toLocaleString()+' log'+(n!==1?'s':'')+' match current filters';
+      var tc=el('v26-table-count');if(tc)tc.textContent=n.toLocaleString()+' rows';
+    },50);
+  };
 
 })();
 </script>
