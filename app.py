@@ -16,6 +16,27 @@ except Exception:
 
 app = Flask(__name__)
 
+# ── Web/API security hardening ───────────────────────────────────────────────
+@app.after_request
+def apply_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+    return response
+
+_API_RATE_BUCKET = {}
+def api_rate_limited(key, limit=120, window=60):
+    now = int(time.time())
+    bucket = _API_RATE_BUCKET.setdefault(key, [])
+    bucket[:] = [t for t in bucket if now - t < window]
+    if len(bucket) >= limit:
+        return True
+    bucket.append(now)
+    return False
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
@@ -608,7 +629,7 @@ def mask_secrets(text: str):
     sensitive_keys = [
         "customerName", "name", "fullName", "firstName", "lastName",
         "loanNumber", "loanId", "accountNumber", "accountNo", "primaryCustomerId",
-        "customerId", "applicationNo", "paymentId", "bbpsId", "receiptNumber",
+        "customerId", "applicationNo", "checkoutId", "bbpsId", "receiptNumber",
         "transactionId", "gatewayTransactionId", "upiId", "vpa", "cardNumber", "ifsc"
     ]
     key_alt = "|".join(map(re.escape, sensitive_keys))
@@ -766,7 +787,7 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         r'before request to ([^\n*{]+)', r'after request to ([^\n*{]+)',
         r'before ([a-zA-Z0-9_. -]+?) call', r'after ([a-zA-Z0-9_. -]+?) call',
         r'processor:\s*([^;\]]+)', r'\bintermediaryId"?\s*:\s*"([^"]+)"',
-        r'\bsourceModule"?\s*:\s*"([^"]+)"', r'\bpaymentApp"?\s*:\s*"([^"]+)"'
+        r'\bsourceModule"?\s*:\s*"([^"]+)"', r'\bcheckoutApp"?\s*:\s*"([^"]+)"'
     ]
     for pat in dep_patterns:
         dep_candidates += re.findall(pat, raw, re.I)
@@ -1126,6 +1147,12 @@ def analyse():
 # ── API ingestion (Bearer auth) ───────────────────────────────────────────────
 @app.route("/api/v1/logs/ingest", methods=["POST"])
 def api_ingest():
+    MAX_INGEST_BYTES = int(os.environ.get("MAX_INGEST_BYTES", 25 * 1024 * 1024))
+    if request.content_length and request.content_length > MAX_INGEST_BYTES:
+        return jsonify({"error": "Payload too large", "limitBytes": MAX_INGEST_BYTES}), 413
+    remote_key = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0]
+    if api_rate_limited(remote_key):
+        return jsonify({"error": "Rate limit exceeded", "retryAfterSeconds": 60}), 429
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return jsonify({"error": "Missing token. Use Authorization: Bearer <OBSERVEX_API_KEY>"}), 401
@@ -1216,9 +1243,9 @@ def api_ingest_docs_short():
     return jsonify({
         "endpoint": "POST /api/v1/logs/ingest",
         "auth": "Authorization: Bearer <OBSERVEX_API_KEY>",
-        "raw_example": {"environment":"PROD","application":"s-paymentengine-api","logs":"INFO 2026-04-25 14:51:17 ..."},
-        "structured_example": {"environment":"PROD","eventId":"45673527-38365673-3987637","application":"s-paymentengine-api","timestamp":"2026-04-25 14:51:17","payload":{"message":"payment success"}},
-        "batch_example": {"environment":"PROD","application":"s-paymentengine-api","logs":[{"timestamp":"2026-04-25T14:51:17Z","level":"INFO","eventId":"45673527-38365673-3987637","message":"before request","payload":{}}]}
+        "raw_example": {"environment":"SANDBOX","application":"demo-checkout-api","logs":"INFO 2026-05-12 09:18:44 checkout completed"},
+        "structured_example": {"environment":"SANDBOX","eventId":"demo-trace-8f91a2c4","application":"demo-checkout-api","timestamp":"2026-05-12 09:18:44","payload":{"status":"Success","orderId":"ORD-DEMO-1024","amount":2499}},
+        "batch_example": {"environment":"SANDBOX","application":"demo-checkout-api","logs":[{"timestamp":"2026-05-12T09:18:44Z","level":"INFO","eventId":"demo-trace-8f91a2c4","message":"checkout completed","payload":{"status":"Success"}}]}
     })
 
 # ── Alert rules ───────────────────────────────────────────────────────────────
@@ -1525,13 +1552,13 @@ def api_docs():
         "endpoints": {
             "ingest": {
                 "method": "POST", "path": "/api/v1/logs/ingest",
-                "raw_request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":"INFO 2026-04-25 14:51:17 ..."},
-                "structured_request": {"environment":"PROD", "eventId":"45673527-38365673-3987637", "application":"s-paymentengine-api", "timestamp":"2026-04-25 14:51:17", "payload": {"status":"Success", "amount": 1200}},
-                "batch_request": {"environment":"PROD", "application":"s-paymentengine-api", "logs":[{"timestamp":"2026-04-25T14:51:17Z", "level":"INFO", "eventId":"45673527-38365673-3987637", "message":"payment success", "payload":{}}]},
+                "raw_request": {"environment":"SANDBOX", "application":"demo-checkout-api", "logs":"INFO 2026-05-12 09:18:44 checkout completed"},
+                "structured_request": {"environment":"SANDBOX", "eventId":"demo-trace-8f91a2c4", "application":"demo-checkout-api", "timestamp":"2026-05-12 09:18:44", "payload": {"status":"Success", "orderId":"ORD-DEMO-1024", "amount": 2499}},
+                "batch_request": {"environment":"SANDBOX", "application":"demo-checkout-api", "logs":[{"timestamp":"2026-05-12T09:18:44Z", "level":"INFO", "eventId":"demo-trace-8f91a2c4", "message":"checkout completed", "payload":{"status":"Success"}}]},
                 "success_response": {"status":"success", "session_id":123, "stored": True, "ingested": 1, "processingTimeMs": 42},
                 "failure_responses": {"401":"Missing/invalid API key", "400":"logs field or structured event payload required", "413":"payload exceeds MAX_UPLOAD_MB"}
             },
-            "search": {"method":"GET", "path":"/api/v1/logs/search?q=level:ERROR&limit=200", "purpose":"Search recently persisted masked logs"},
+            "search": {"method":"GET", "path":"/api/v1/logs/search?q=env:SANDBOX app:demo-checkout-api level:ERROR&limit=200", "purpose":"Search recently persisted masked logs"},
             "trace": {"method":"GET", "path":"/api/v1/trace/<trace_id>", "purpose":"Return grouped trace/event timeline from persisted masked logs"},
             "connectors": {"method":"GET/POST/DELETE", "path":"/connectors", "types":["s3","cloudwatch","mulesoft","kafka","webhook"]},
             "alert_destinations": {"method":"GET/POST/DELETE", "path":"/alert-destinations", "types":["email","slack","teams","webhook"]},
@@ -1539,7 +1566,7 @@ def api_docs():
             "retention": {"method":"POST", "path":"/retention/apply"}
         },
         "security": [
-            "JWT, bearer tokens, API keys, Aadhaar, PAN, mobile, email, customer names and loan/account/payment identifiers are masked before UI/export/storage.",
+            "JWT, bearer tokens, API keys, Aadhaar, PAN, mobile, email, customer names and loan/account/checkout identifiers are masked before UI/export/storage.",
             "Audit logs track upload, delete, export, connector, settings and trace lookup actions.",
             "Retention policy can auto-remove old sessions and volume files."
         ]
@@ -1555,37 +1582,46 @@ Base URL: https://your-domain.com
 
 ## Endpoint
 POST /api/v1/logs/ingest
-Authorization: Bearer obsx_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Authorization: Bearer obsx_demo_sk_live_xxxxx
 Content-Type: application/json
 
 ## Raw log ingestion
 ```json
 {
-  "environment": "PROD",
-  "application": "s-paymentengine-api",
-  "logs": "INFO 2026-04-25 14:51:17 ..."
+  "environment": "SANDBOX",
+  "application": "demo-checkout-api",
+  "source": "api",
+  "logs": "INFO 2026-05-12 09:18:44 checkout completed"
 }
 ```
 
 ## OR Structured event ingestion
 ```json
 {
-  "environment": "PROD",
-  "eventId": "45673527-38365673-3987637",
-  "application": "s-paymentengine-api",
-  "timestamp": "2026-04-25 14:51:17",
+  "environment": "SANDBOX",
+  "eventId": "demo-trace-8f91a2c4",
+  "application": "demo-checkout-api",
+  "timestamp": "2026-05-12 09:18:44",
   "payload": {
     "status": "Success",
-    "amount": 1200
+    "orderId": "ORD-DEMO-1024",
+    "amount": 2499
   }
 }
 ```
 
 ## What ObserveX does automatically
-- Schema detected: MuleSoft/API
-- PII masked: Aadhaar, PAN, JWT, mobile, loan IDs
+- Schema detected: API/JSON
+- PII masked: tokens, phone, email, PAN, Aadhaar
 - Trace timeline created
 - RCA evidence prepared
+
+## API security checklist
+- Use HTTPS only
+- Rotate API keys regularly
+- Keep keys outside frontend code
+- Send only masked/sanitized payloads when possible
+- Use 413/429 responses to backoff retry queues
 
 ## Responses
 200 success, 400 invalid payload, 401 missing/invalid token, 413 too large, 500 server error.
@@ -1598,8 +1634,8 @@ Content-Type: application/json
 @app.route("/demo/load", methods=["POST"])
 @login_required
 def demo_load():
-    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-payment-api].post:\payment:application\json:demo-config.CPU_LITE] [processor: payment-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before payment log {"amount":1200,"paymentStatus":"Success","customerMobile":"9876543210","loanNumber":"FS123456789"}
-ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-payment-api].post:\payment:application\json:demo-config.CPU_LITE] [processor: payment-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling settlement service duration=3350
+    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
+ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling inventory service duration=3350
 WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
 INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200
 """
@@ -1792,7 +1828,7 @@ def dashboard_widgets():
         if "latency" in low: return f"{round(sum(x.avg_latency or 0 for x in sessions)/max(1,len(sessions)))}ms"
         if "trace" in low: return sum(x.total_lines or 0 for x in sessions)
         if "application" in low or "app" in low: return len(set(",".join([x.apps_found or "" for x in sessions]).split(",")) - {""})
-        if "payment" in low: return "auto-detected"
+        if "checkout" in low: return "auto-detected"
         if "ingestion" in low: return f"{usage['mb']} MB"
         if "health" in low: return max(0, 100 - min(100, errors//10))
         return "ready"
@@ -1838,13 +1874,13 @@ def log_metrics():
     errors = sum(x.error_count or 0 for x in sessions)
     warns = sum(x.warn_count or 0 for x in sessions)
     success = max(0, total - errors - warns)
-    payments = sum(1 for x in sessions if "payment" in (x.apps_found or "").lower() or "payment" in (x.filename or "").lower())
+    checkouts = sum(1 for x in sessions if "checkout" in (x.apps_found or "").lower() or "checkout" in (x.filename or "").lower())
     avg_errors = (sum(x.error_count or 0 for x in sessions[1:]) / max(1, len(sessions)-1)) if len(sessions) > 1 else 0
     status = "Spike" if sessions and (sessions[0].error_count or 0) > max(10, avg_errors * 2) else "Normal"
     severity = min(100, errors//10 + warns//30)
     return jsonify({
         "ingested_lines": total, "errors": errors, "warnings": warns, "success": success,
-        "payments": payments, "severity": severity,
+        "checkouts": checkouts, "severity": severity,
         "metrics": [
             {"name":"Error count", "value": errors}, {"name":"Warning count", "value": warns},
             {"name":"Success/Info signals", "value": success}, {"name":"Sessions analysed", "value": len(sessions)}

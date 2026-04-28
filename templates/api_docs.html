@@ -9,30 +9,32 @@
   <section class="docs-hero">
     <div><div class="badge">Production ingestion API</div><h1 class="docs-title">Stream logs into <span>ObserveX</span> in minutes.</h1><p class="docs-copy">Use raw logs, structured events, or batch payloads. ObserveX masks sensitive data, detects schema, builds traces, generates metrics, and creates RCA-ready incident evidence.</p><div class="docs-actions"><a class="btn btn-primary" href="/api/docs/download">Download API Guide</a><a class="btn btn-ghost" href="/register">Create API key</a></div></div>
     <div class="docs-panel"><div class="terminal">POST /api/v1/logs/ingest
-Authorization: Bearer obsx_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Authorization: Bearer obsx_demo_sk_live_xxxxx
 Content-Type: application/json
 
 {
-  "environment": "PROD",
-  "application": "s-paymentengine-api",
-  "logs": "INFO 2026-04-25 14:51:17 ..."
+  "environment": "SANDBOX",
+  "application": "demo-checkout-api",
+  "source": "api",
+  "logs": "INFO 2026-05-12 09:18:44 checkout completed"
 }
 
 OR
 
 {
-  "environment": "PROD",
-  "eventId": "45673527-38365673-3987637",
-  "application": "s-paymentengine-api",
-  "timestamp": "2026-04-25 14:51:17",
+  "environment": "SANDBOX",
+  "eventId": "demo-trace-8f91a2c4",
+  "application": "demo-checkout-api",
+  "timestamp": "2026-05-12 09:18:44",
   "payload": {
     "status": "Success",
-    "amount": 1200
+    "orderId": "ORD-DEMO-1024",
+    "amount": 2499
   }
 }
 
-✓ Schema detected: MuleSoft/API
-✓ PII masked: Aadhaar, PAN, JWT, mobile, loan IDs
+✓ Schema detected: API/JSON
+✓ PII masked: tokens, phone, email, PAN, Aadhaar
 ✓ Trace timeline created
 ✓ RCA evidence prepared</div></div>
   </section>
@@ -46,7 +48,7 @@ OR
   "stored": true
 }</div></div>
     <div class="doc-card"><span class="badge">Failures</span><h3>Common responses</h3><p><b class="error">401</b> Missing or invalid token<br><b class="warn">400</b> Invalid payload<br><b class="warn">413</b> Payload too large<br><b class="error">500</b> Internal server error</p></div>
-    <div class="doc-card"><span class="badge">Search</span><h3><span class="method">GET</span> /api/v1/logs/search</h3><p>Query masked persisted logs using simple syntax like <code>env=PROD app=s-paymentengine-api level=ERROR</code>.</p></div>
+    <div class="doc-card"><span class="badge">Search</span><h3><span class="method">GET</span> /api/v1/logs/search</h3><p>Query masked persisted logs using simple syntax like <code>env=SANDBOX app=demo-checkout-api level=ERROR</code>.</p></div>
     <div class="doc-card"><span class="badge">Trace</span><h3><span class="method">GET</span> /api/v1/trace/&lt;id&gt;</h3><p>Returns a grouped event timeline, surrounding context, failures, latency clues and supporting evidence rows.</p></div>
     <div class="doc-card"><span class="badge">Security</span><h3>Safe by default</h3><p>Docs use dummy keys only. Real keys are visible only inside authenticated workspace settings and should be rotated regularly.</p></div>
   </section>
