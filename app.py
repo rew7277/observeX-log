@@ -690,10 +690,22 @@ def build_log_rows(records, env, filename=""):
                 except Exception:
                     lat = ""
         flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
+        # Endpoint-aware extraction: dashboards should group by business API, not Mule /processors/N paths.
+        api_method = extract_first([r"\]\.(get|post|put|patch|delete):", r"\b(GET|POST|PUT|PATCH|DELETE)\s+/"], line, "")
+        api_path = extract_first([
+            r"\]\.(?:get|post|put|patch|delete):\\([^:\]\s]+)",
+            r"\]\.(?:get|post|put|patch|delete):(/[^:\]\s]+)",
+            r'"RequestUri"\s*:\s*"([^"]+)"',
+            r'\b(?:GET|POST|PUT|PATCH|DELETE)\s+(/[^\s"\']+)'
+        ], line, "")
+        if api_path:
+            api_path = "/" + api_path.strip("/\\").replace("\\", "/")
+        flow_group = re.sub(r"/processors.*$", "", flow or "", flags=re.I)
         rows.append({
             "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
-            "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
+            "event": trace, "flow": flow, "flow_group": flow_group, "api": api_path, "method": api_method.upper() if api_method else "",
+            "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
             "message": mask_secrets(line), "is_multiline": "\n" in line
         })
     return rows
