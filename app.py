@@ -1506,6 +1506,10 @@ def api_trace_lookup(trace_id):
 
 
 @app.route("/api/docs")
+def api_docs_page():
+    return render_template("api_docs.html")
+
+@app.route("/api/docs.json")
 @login_required
 def api_docs():
     user = get_current_user()
@@ -1541,6 +1545,49 @@ def api_docs():
         ]
     })
 
+
+
+@app.route("/api/docs/download")
+def api_docs_download():
+    content = """# ObserveX API Ingestion Guide
+
+Base URL: https://your-domain.com
+
+## Authentication
+Authorization: Bearer obsx_live_xxxxxxxxxxxxxxxxxxxxxxxx
+
+## Raw log ingestion
+POST /api/v1/logs/ingest
+
+```json
+{
+  "environment": "PROD",
+  "application": "s-paymentengine-api",
+  "logs": "INFO 2026-04-25 14:51:17 ..."
+}
+```
+
+## Structured event ingestion
+```json
+{
+  "environment": "PROD",
+  "eventId": "45673527-38365673-3987637",
+  "application": "s-paymentengine-api",
+  "timestamp": "2026-04-25 14:51:17",
+  "payload": {"status": "Success", "amount": 1200}
+}
+```
+
+## Responses
+200 success, 400 invalid payload, 401 missing/invalid token, 413 too large, 500 server error.
+
+## Security
+ObserveX masks JWTs, API keys, Aadhaar, PAN, mobile numbers, customer names, loan IDs and other sensitive data before UI/export/storage.
+"""
+    resp = make_response(content)
+    resp.headers["Content-Type"] = "text/markdown"
+    resp.headers["Content-Disposition"] = "attachment; filename=observex-api-guide.md"
+    return resp
 
 @app.route("/demo/load", methods=["POST"])
 @login_required
