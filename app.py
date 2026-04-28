@@ -200,6 +200,35 @@ class SharedReport(db.Model):
     expires_at  = db.Column(db.DateTime, nullable=False)
     created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+
+class SavedSearch(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    title      = db.Column(db.String(140), nullable=False)
+    query      = db.Column(db.String(500), default="")
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class DashboardWidget(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    title      = db.Column(db.String(140), nullable=False)
+    widget_type= db.Column(db.String(80), default="Errors")
+    config_json= db.Column(db.Text, default="{}")
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class Incident(db.Model):
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    title         = db.Column(db.String(220), nullable=False)
+    severity      = db.Column(db.Integer, default=0)
+    impacted_apis = db.Column(db.String(500), default="")
+    owner         = db.Column(db.String(120), default="")
+    status        = db.Column(db.String(40), default="Open")
+    notes         = db.Column(db.Text, default="")
+    evidence_json = db.Column(db.Text, default="[]")
+    created_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
 class QueryMetric(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -1658,6 +1687,148 @@ def rotate_api_key():
     user.api_key = secrets.token_hex(32)
     db.session.commit()
     return jsonify({"api_key": user.api_key})
+
+
+@app.route("/saved-searches", methods=["GET", "POST", "DELETE"])
+@login_required
+def saved_searches():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        row = SavedSearch(user_id=user.id, title=str(data.get("title") or "Saved search")[:140], query=str(data.get("query") or "")[:500])
+        db.session.add(row)
+        audit_event(user, "saved_search.create", row.title, {"query": row.query})
+        db.session.commit()
+        return jsonify({"id": row.id, "status":"created"})
+    if request.method == "DELETE":
+        row = SavedSearch.query.filter_by(user_id=user.id, id=request.args.get("id")).first()
+        if row:
+            audit_event(user, "saved_search.delete", row.title)
+            db.session.delete(row)
+            db.session.commit()
+        return jsonify({"status":"deleted"})
+    rows = SavedSearch.query.filter_by(user_id=user.id).order_by(SavedSearch.created_at.desc()).all()
+    return jsonify([{"id": r.id, "title": r.title, "query": r.query, "at": r.created_at.strftime("%Y-%m-%d %H:%M")} for r in rows])
+
+@app.route("/dashboard-widgets", methods=["GET", "POST", "DELETE"])
+@login_required
+def dashboard_widgets():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        row = DashboardWidget(user_id=user.id, title=str(data.get("title") or data.get("type") or "Widget")[:140], widget_type=str(data.get("type") or "Errors")[:80], config_json=json.dumps(data.get("config") or {}))
+        db.session.add(row)
+        audit_event(user, "dashboard_widget.create", row.title, {"type": row.widget_type})
+        db.session.commit()
+        return jsonify({"id": row.id, "status":"created"})
+    if request.method == "DELETE":
+        row = DashboardWidget.query.filter_by(user_id=user.id, id=request.args.get("id")).first()
+        if row:
+            audit_event(user, "dashboard_widget.delete", row.title)
+            db.session.delete(row)
+            db.session.commit()
+        return jsonify({"status":"deleted"})
+    usage = storage_status(user)
+    sessions = LogSession.query.filter_by(user_id=user.id).all()
+    errors = sum(x.error_count or 0 for x in sessions)
+    warns = sum(x.warn_count or 0 for x in sessions)
+    rows = DashboardWidget.query.filter_by(user_id=user.id).order_by(DashboardWidget.created_at.asc()).all()
+    def value_for(t):
+        low = (t or "").lower()
+        if "error" in low: return errors
+        if "latency" in low: return f"{round(sum(x.avg_latency or 0 for x in sessions)/max(1,len(sessions)))}ms"
+        if "trace" in low: return sum(x.total_lines or 0 for x in sessions)
+        if "application" in low or "app" in low: return len(set(",".join([x.apps_found or "" for x in sessions]).split(",")) - {""})
+        if "payment" in low: return "auto-detected"
+        if "ingestion" in low: return f"{usage['mb']} MB"
+        if "health" in low: return max(0, 100 - min(100, errors//10))
+        return "ready"
+    return jsonify([{"id": r.id, "title": r.title, "type": r.widget_type, "value": value_for(r.widget_type)} for r in rows])
+
+@app.route("/incidents", methods=["GET", "POST"])
+@login_required
+def incidents():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        sessions = LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).limit(5).all()
+        severity = min(100, sum(x.error_count or 0 for x in sessions)//5 + sum(x.warn_count or 0 for x in sessions)//25)
+        apps = sorted(set(",".join([x.apps_found or "" for x in sessions]).split(",")) - {""})
+        row = Incident(user_id=user.id, title=str(data.get("title") or "Production incident")[:220], owner=str(data.get("owner") or "")[:120], status=str(data.get("status") or "Open")[:40], severity=severity, impacted_apis=", ".join(apps[:8]), evidence_json=json.dumps(["Created from current ObserveX dataset", "Use Log Search and Trace Explorer for supporting evidence"]))
+        db.session.add(row)
+        audit_event(user, "incident.create", row.title, {"severity": severity})
+        db.session.commit()
+        return jsonify({"id": row.id, "status":"created"})
+    rows = Incident.query.filter_by(user_id=user.id).order_by(Incident.updated_at.desc()).all()
+    return jsonify([{"id": r.id, "title": r.title, "severity": r.severity, "impacted_apis": r.impacted_apis, "owner": r.owner, "status": r.status, "notes": r.notes, "at": r.created_at.strftime("%Y-%m-%d %H:%M")} for r in rows])
+
+@app.route("/incidents/<int:incident_id>", methods=["POST"])
+@login_required
+def update_incident(incident_id):
+    user = get_current_user()
+    row = Incident.query.filter_by(user_id=user.id, id=incident_id).first_or_404()
+    data = request.get_json(force=True, silent=True) or {}
+    row.status = str(data.get("status") or row.status)[:40]
+    row.owner = str(data.get("owner") or row.owner)[:120]
+    row.notes = str(data.get("notes") or row.notes)[:4000]
+    row.updated_at = datetime.datetime.utcnow()
+    audit_event(user, "incident.update", row.title, {"status": row.status})
+    db.session.commit()
+    return jsonify({"status":"updated"})
+
+@app.route("/log-metrics")
+@login_required
+def log_metrics():
+    user = get_current_user()
+    sessions = LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).limit(50).all()
+    total = sum(x.total_lines or 0 for x in sessions)
+    errors = sum(x.error_count or 0 for x in sessions)
+    warns = sum(x.warn_count or 0 for x in sessions)
+    success = max(0, total - errors - warns)
+    payments = sum(1 for x in sessions if "payment" in (x.apps_found or "").lower() or "payment" in (x.filename or "").lower())
+    avg_errors = (sum(x.error_count or 0 for x in sessions[1:]) / max(1, len(sessions)-1)) if len(sessions) > 1 else 0
+    status = "Spike" if sessions and (sessions[0].error_count or 0) > max(10, avg_errors * 2) else "Normal"
+    severity = min(100, errors//10 + warns//30)
+    return jsonify({
+        "ingested_lines": total, "errors": errors, "warnings": warns, "success": success,
+        "payments": payments, "severity": severity,
+        "metrics": [
+            {"name":"Error count", "value": errors}, {"name":"Warning count", "value": warns},
+            {"name":"Success/Info signals", "value": success}, {"name":"Sessions analysed", "value": len(sessions)}
+        ],
+        "anomaly": {"status": status, "reason": "Latest upload has elevated errors versus previous baseline." if status == "Spike" else "No unusual spike detected yet. Baseline improves with more uploads."}
+    })
+
+@app.route("/marketplace")
+@login_required
+def marketplace():
+    return jsonify([
+        {"name":"MuleSoft", "icon":"🧩", "status":"available", "description":"Parse Mule runtime logs, processors, event IDs and flows."},
+        {"name":"AWS CloudWatch", "icon":"☁️", "status":"available", "description":"Ingest application and Lambda logs via connector configuration."},
+        {"name":"Amazon S3", "icon":"🪣", "status":"available", "description":"Schedule bucket/prefix pulls for large log files."},
+        {"name":"Slack", "icon":"💬", "status":"available", "description":"Send incident and alert notifications to channels."},
+        {"name":"Microsoft Teams", "icon":"👥", "status":"available", "description":"Notify support and SRE teams from alert escalations."},
+        {"name":"Jira", "icon":"🎫", "status":"planned", "description":"Create and sync incident tickets."},
+        {"name":"GitHub", "icon":"🐙", "status":"planned", "description":"Correlate incidents with deployments and commits."},
+        {"name":"Webhook", "icon":"🔗", "status":"available", "description":"Generic outbound integration for any workflow."}
+    ])
+
+@app.route("/billing/usage")
+@login_required
+def billing_usage():
+    user = get_current_user()
+    ws = ensure_default_workspace(user)
+    limits = get_plan_limits(ws.plan if ws else "starter")
+    usage = storage_status(user)
+    members = WorkspaceMember.query.filter_by(workspace_id=ws.id).count() if ws else 1
+    alerts = AlertRule.query.filter_by(user_id=user.id).count()
+    return jsonify({
+        "plan": ws.plan if ws else "starter", "storage_mb": usage["mb"],
+        "ingestion_gb_month": round(usage["bytes"] / 1024 / 1024 / 1024, 3),
+        "users": members, "retention_days": limits["retention_days"], "alerts": alerts,
+        "limits": limits
+    })
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
