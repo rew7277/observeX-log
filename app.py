@@ -1553,12 +1553,12 @@ def api_docs_download():
 
 Base URL: https://your-domain.com
 
-## Authentication
+## Endpoint
+POST /api/v1/logs/ingest
 Authorization: Bearer obsx_live_xxxxxxxxxxxxxxxxxxxxxxxx
+Content-Type: application/json
 
 ## Raw log ingestion
-POST /api/v1/logs/ingest
-
 ```json
 {
   "environment": "PROD",
@@ -1567,22 +1567,28 @@ POST /api/v1/logs/ingest
 }
 ```
 
-## Structured event ingestion
+## OR Structured event ingestion
 ```json
 {
   "environment": "PROD",
   "eventId": "45673527-38365673-3987637",
   "application": "s-paymentengine-api",
   "timestamp": "2026-04-25 14:51:17",
-  "payload": {"status": "Success", "amount": 1200}
+  "payload": {
+    "status": "Success",
+    "amount": 1200
+  }
 }
 ```
 
+## What ObserveX does automatically
+- Schema detected: MuleSoft/API
+- PII masked: Aadhaar, PAN, JWT, mobile, loan IDs
+- Trace timeline created
+- RCA evidence prepared
+
 ## Responses
 200 success, 400 invalid payload, 401 missing/invalid token, 413 too large, 500 server error.
-
-## Security
-ObserveX masks JWTs, API keys, Aadhaar, PAN, mobile numbers, customer names, loan IDs and other sensitive data before UI/export/storage.
 """
     resp = make_response(content)
     resp.headers["Content-Type"] = "text/markdown"
