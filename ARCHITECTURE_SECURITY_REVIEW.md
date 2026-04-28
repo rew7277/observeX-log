@@ -28,3 +28,12 @@
 - Validate content type and reject unsupported payloads.
 - Mask secrets before persistence and before any export/report sharing.
 - Add HMAC signatures for high-trust integrations later.
+
+## v18 hardening update
+- Removed dead tmp.js/tmp2.js and committed __pycache__ artifacts.
+- Dockerfile is the selected Railway deployment path; Procfile/nixpacks removed to avoid conflicting build strategies.
+- SECRET_KEY now warns loudly when missing so Railway sessions are not unexpectedly invalidated after restart.
+- Alert execution engine added: alert rules are evaluated after file/API ingestion, firings are stored, and email destinations are notified in MVP mode.
+- Added operational endpoints/dashboards: /api-keys, /alert-firings, /retention/status, /activity/summary.
+- Retention cleanup now has preview/status and destructive apply endpoint.
+- API ingestion keeps rate limit, payload limit, API key auth, PII masking, audit events, and alert evaluation.

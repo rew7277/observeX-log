@@ -38,7 +38,11 @@ def api_rate_limited(key, limit=120, window=60):
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+_secret_key = os.environ.get("SECRET_KEY", "")
+if not _secret_key:
+    _secret_key = secrets.token_hex(32)
+    app.logger.warning("SECRET_KEY env var is not set. Sessions will be invalidated on every restart. Set SECRET_KEY in Railway variables before production.")
+app.config["SECRET_KEY"] = _secret_key
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "sqlite:///observex.db"
 ).replace("postgres://", "postgresql://")
@@ -130,6 +134,19 @@ class AlertRule(db.Model):
     threshold  = db.Column(db.Float)
     active     = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class AlertFiring(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    rule_id     = db.Column(db.Integer, db.ForeignKey("alert_rule.id"), nullable=True)
+    rule_name   = db.Column(db.String(100), default="")
+    condition   = db.Column(db.String(100), default="")
+    value       = db.Column(db.Float, default=0)
+    threshold   = db.Column(db.Float, default=0)
+    session_id  = db.Column(db.Integer, default=0)
+    environment = db.Column(db.String(30), default="")
+    notified    = db.Column(db.Boolean, default=False)
+    fired_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 class CustomEnvironment(db.Model):
     id         = db.Column(db.Integer, primary_key=True)
@@ -365,6 +382,47 @@ def apply_retention_for_user(user):
     audit_event(user, "retention.apply", "LogSession", {"deleted_sessions": deleted, "days": pol.days})
     db.session.commit()
     return deleted
+
+
+def retention_preview(user):
+    pol = get_retention_policy(user)
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=max(1, int(pol.days or 30)))
+    old = LogSession.query.filter(LogSession.user_id == user.id, LogSession.created_at < cutoff).all()
+    keep = LogSession.query.filter(LogSession.user_id == user.id, LogSession.created_at >= cutoff).count()
+    return {"retention_days": pol.days, "cutoff": cutoff.strftime("%Y-%m-%d %H:%M"), "would_delete": len(old), "surviving": keep}
+
+def evaluate_alerts(user, log_session, result):
+    """Evaluate active alert rules after ingestion; store firing history and email destinations."""
+    fired = []
+    for rule in AlertRule.query.filter_by(user_id=user.id, active=True).all():
+        cond = (rule.condition or "").strip().lower()
+        if cond in {"errors", "error", "error_count"}:
+            value = float(result.get("errors", 0)); triggered = value > float(rule.threshold or 0)
+        elif cond in {"warnings", "warns", "warn", "warning_count"}:
+            value = float(result.get("warns", 0)); triggered = value > float(rule.threshold or 0)
+        elif cond in {"latency", "p95", "p95_latency"}:
+            value = float(result.get("p95", result.get("latency", 0))); triggered = value > float(rule.threshold or 0)
+        elif cond in {"health", "health_score"}:
+            value = float(result.get("health_score", 100)); triggered = value < float(rule.threshold or 0)
+        elif cond in {"severity", "incident_severity"}:
+            value = float((result.get("severity") or {}).get("score", 0)); triggered = value > float(rule.threshold or 0)
+        else:
+            continue
+        if triggered:
+            firing = AlertFiring(user_id=user.id, rule_id=rule.id, rule_name=rule.name or "Alert rule", condition=rule.condition or cond, value=value, threshold=float(rule.threshold or 0), session_id=log_session.id if log_session else 0, environment=(log_session.environment if log_session else result.get("environment", "")))
+            db.session.add(firing)
+            fired.append({"rule": firing.rule_name, "condition": firing.condition, "value": value, "threshold": firing.threshold})
+    if fired:
+        for dest in AlertDestination.query.filter_by(user_id=user.id, active=True).all():
+            if dest.kind == "email" and dest.target:
+                try:
+                    msg = Message("ObserveX alert fired", recipients=[dest.target])
+                    msg.body = "ObserveX alert(s) fired:\n" + "\n".join([f"- {x['rule']}: {x['condition']}={x['value']} threshold={x['threshold']}" for x in fired])
+                    mail.send(msg)
+                except Exception:
+                    app.logger.exception("Alert notification failed")
+        audit_event(user, "alert.fire", "ingestion", {"fired": fired})
+    return fired
 
 
 _db_init_lock = threading.Lock()
@@ -1147,6 +1205,11 @@ def analyse():
         duration_ms = int((time.time()-start_ms)*1000)
         db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
         audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
+        try:
+            result["alerts_fired"] = evaluate_alerts(user, ls, result)
+        except Exception:
+            app.logger.exception("Alert evaluation failed")
+            result["alerts_fired"] = []
         db.session.commit()
         result["session_id"] = ls.id
         result["stored"] = True
@@ -1235,6 +1298,11 @@ def api_ingest():
         app.logger.exception("Could not persist API ingestion to volume")
     db.session.add(QueryMetric(user_id=user.id, action="api_ingest", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(str(raw).encode("utf-8"))))
     audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "source": source, "total": result.get("total"), "errors": result.get("errors")})
+    try:
+        result["alerts_fired"] = evaluate_alerts(user, ls, result)
+    except Exception:
+        app.logger.exception("Alert evaluation failed")
+        result["alerts_fired"] = []
     db.session.commit()
     return jsonify({
         "status": "success",
@@ -1433,6 +1501,36 @@ def retention_apply():
     user = get_current_user()
     deleted = apply_retention_for_user(user)
     return jsonify({"status":"ok", "deleted_sessions": deleted})
+
+@app.route("/retention/status", methods=["GET"])
+@login_required
+def retention_status():
+    return jsonify(retention_preview(get_current_user()))
+
+@app.route("/alert-firings", methods=["GET"])
+@login_required
+def alert_firings():
+    user = get_current_user()
+    rows = AlertFiring.query.filter_by(user_id=user.id).order_by(AlertFiring.fired_at.desc()).limit(100).all()
+    return jsonify([{"id": r.id, "rule_id": r.rule_id, "rule_name": r.rule_name, "condition": r.condition, "value": r.value, "threshold": r.threshold, "session_id": r.session_id, "environment": r.environment, "notified": r.notified, "fired_at": r.fired_at.strftime("%Y-%m-%d %H:%M:%S")} for r in rows])
+
+@app.route("/activity/summary", methods=["GET"])
+@login_required
+def activity_summary():
+    user = get_current_user(); ws = ensure_default_workspace(user)
+    out = []
+    for m in WorkspaceMember.query.filter_by(workspace_id=ws.id).all():
+        u = db.session.get(User, m.user_id)
+        count = AuditEvent.query.filter_by(user_id=m.user_id).count()
+        last = AuditEvent.query.filter_by(user_id=m.user_id).order_by(AuditEvent.created_at.desc()).first()
+        out.append({"user_id": m.user_id, "name": u.name if u else "Unknown", "email": u.email if u else "", "role": m.role, "events": count, "last_activity": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None})
+    return jsonify(out)
+
+@app.route("/api-keys", methods=["GET"])
+@login_required
+def api_keys_status():
+    user = get_current_user()
+    return jsonify({"key_preview": "obsx_live_" + (user.api_key[-8:] if user.api_key else "not-set"), "created_for": user.email, "rotation_endpoint": "/profile/apikey", "docs": "/api/docs"})
 
 @app.route("/usage", methods=["GET"])
 @login_required
@@ -1646,7 +1744,7 @@ Content-Type: application/json
 @app.route("/demo/load", methods=["POST"])
 @login_required
 def demo_load():
-    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
+    sample = r"""INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
 ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling inventory service duration=3350
 WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
 INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200
@@ -1786,8 +1884,9 @@ def rotate_api_key():
     if user is None:
         return jsonify({"error": "Session expired. Please login again."}), 401
     user.api_key = secrets.token_hex(32)
+    audit_event(user, "api_key.rotate", "profile", {})
     db.session.commit()
-    return jsonify({"api_key": user.api_key})
+    return jsonify({"api_key": user.api_key, "rotated_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/saved-searches", methods=["GET", "POST", "DELETE"])
