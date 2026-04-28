@@ -297,3 +297,255 @@ setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{v23EnsureControls(); window.ox23RefreshDashboard(); window.ox23RenderSystemMap();},900));
 })();
 </script>
+
+<style id="observex-v24-styles">
+/* v24: System Map full multi-API panel + traffic trend fixes */
+#ox24-sysmap-panel{margin-bottom:18px}
+.ox24-api-header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 20px;background:linear-gradient(135deg,rgba(124,58,237,.18),rgba(14,165,233,.09));border:1px solid rgba(139,92,246,.36);border-radius:18px;margin-bottom:14px}
+.ox24-api-header h2{margin:0;font-size:20px;color:#fff;flex:1}
+.ox24-api-header select{min-width:280px;height:44px;border-radius:12px;background:#101023;color:#fff;border:1px solid rgba(168,85,247,.5);padding:0 13px;font-weight:700;font-size:15px}
+.ox24-api-header .ox24-label{font-size:12px;color:#a5b4fc;text-transform:uppercase;font-weight:900;letter-spacing:.07em;margin-right:4px}
+.ox24-stat-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.ox24-stat-pill{display:flex;flex-direction:column;align-items:center;min-width:110px;padding:10px 14px;border-radius:14px;border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.58)}
+.ox24-stat-pill small{font-size:11px;color:#a5b4fc;text-transform:uppercase;font-weight:800;letter-spacing:.08em}
+.ox24-stat-pill b{font-size:22px;color:#fff;margin-top:2px}
+.ox24-flow-path{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin-bottom:16px;padding:14px 18px;background:rgba(15,23,42,.52);border:1px solid rgba(148,163,184,.18);border-radius:16px}
+.ox24-flow-node{padding:8px 16px;border-radius:999px;background:rgba(124,58,237,.22);border:1px solid rgba(139,92,246,.45);color:#ddd6fe;font-weight:700;font-size:14px;white-space:nowrap}
+.ox24-flow-node.client{background:rgba(14,165,233,.18);border-color:rgba(14,165,233,.5);color:#7dd3fc}
+.ox24-flow-arrow{padding:0 8px;color:#6366f1;font-size:18px}
+.ox24-ep-grid{display:grid;gap:10px}
+.ox24-ep-card{padding:16px;border:1px solid rgba(148,163,184,.2);border-radius:16px;background:rgba(15,23,42,.52);cursor:pointer;transition:border-color .2s,background .2s}
+.ox24-ep-card:hover{border-color:#22d3ee;background:rgba(14,165,233,.1)}
+.ox24-ep-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px}
+.ox24-ep-name{font-size:16px;font-weight:700;color:#fff}
+.ox24-ep-badges{display:flex;gap:6px;flex-wrap:wrap}
+.ox24-badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700}
+.ox24-badge.err{background:rgba(251,113,133,.15);border:1px solid rgba(251,113,133,.4);color:#fb7185}
+.ox24-badge.warn{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.35);color:#fbbf24}
+.ox24-badge.ok{background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.3);color:#4ade80}
+.ox24-badge.info{background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);color:#94a3b8}
+.ox24-flow-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.ox24-flow-chip{padding:5px 12px;border-radius:999px;border:1px solid rgba(139,92,246,.28);background:rgba(124,58,237,.11);font-size:12px;color:#c4b5fd}
+.ox24-empty{color:#64748b;font-size:15px;padding:28px;text-align:center}
+.ox24-drill-note{font-size:12px;color:#64748b;margin-top:6px;font-style:italic}
+</style>
+
+<script id="observex-v24-fixes">
+/* v24: Fixes traffic trend empty render + full multi-API System Map with per-API dropdown + endpoint drill */
+(function(){
+  /* ── helpers ── */
+  function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+  function rows(){try{return Array.isArray(window._allRows)?window._allRows:[]}catch(e){return[]}}
+  function sig(r){
+    var l=String(r&&r.level||'').toUpperCase(),m=String(r&&r.message||''),st=String(r&&r.status||'');
+    if(l==='ERROR'||l==='FAILURE'||/\b(error|failed|failure|exception|timeout|fatal)\b/i.test(m)||/^5/.test(st))return'error';
+    if(l==='WARN'||l==='WARNING'||/\b(warn|warning|slow|retry)\b/i.test(m)||/^4/.test(st))return'warn';
+    if(l==='SUCCESS'||/\b(success|succeeded|matched|completed|ok)\b/i.test(m)||/status"?\s*:\s*"success/i.test(m)||/^2/.test(st))return'success';
+    return'info';
+  }
+  function parseTs(v){var n=Date.parse(String(v||'').replace(',',' ').replace(' ','T'));return isNaN(n)?null:n;}
+  function endpoint(r){
+    if(!r)return'Unknown';
+    var api=String(r.api||'').trim();if(api)return api.replace(/\\/g,'/');
+    var msg=String(r.message||'');
+    var m=msg.match(/\b(?:GET|POST|PUT|PATCH|DELETE)\s+(\/[^\s"']+)/i)||msg.match(/"RequestUri"\s*:\s*"([^"]+)"/i)||msg.match(/\]\.(?:get|post|put|patch|delete):\\?([^:\]\s]+)/i);
+    if(m&&m[1])return'/'+String(m[1]).replace(/^[\/\\]+/,'').replace(/\\/g,'/');
+    var f=String(r.flow_group||r.flow||'').replace(/\/processors.*$/i,'').replace(/^\/+|\/+$/g,'');
+    return f?('/'+f):'Unknown endpoint';
+  }
+  function appOf(r){return String(r&&r.app||'unknown-app').trim()||'unknown-app';}
+
+  /* ── build per-app/endpoint data from ALL rows ── */
+  function buildApps(){
+    var apps={};
+    rows().forEach(function(r){
+      var a=appOf(r),e=endpoint(r),s=sig(r);
+      if(!apps[a])apps[a]={app:a,total:0,errors:0,warns:0,success:0,info:0,traces:Object.create(null),endpoints:Object.create(null),deps:Object.create(null)};
+      var A=apps[a];A.total++;
+      if(s==='error')A.errors++;else if(s==='warn')A.warns++;else if(s==='success')A.success++;else A.info++;
+      if(r.trace||r.event)A.traces[r.trace||r.event]=1;
+      if(!A.endpoints[e])A.endpoints[e]={endpoint:e,total:0,errors:0,warns:0,success:0,info:0,traces:Object.create(null),flows:Object.create(null)};
+      var E=A.endpoints[e];E.total++;
+      if(s==='error')E.errors++;else if(s==='warn')E.warns++;else if(s==='success')E.success++;else E.info++;
+      if(r.trace||r.event)E.traces[r.trace||r.event]=1;
+      if(r.flow)E.flows[String(r.flow).replace(/\/processors.*$/i,'')]=1;
+      String(r.message||'').replace(/\b(setu|bbps|razorpay|gupshup|salesforce|google\s*secops|s3|cloudwatch|kafka|redis|oracle|mysql|mongodb|upi|crif)\b/ig,function(m){A.deps[m.toLowerCase()]=1;});
+    });
+    return Object.values(apps).map(function(a){
+      a.traceCount=Object.keys(a.traces).length;
+      a.depList=Object.keys(a.deps);
+      a.health=Math.max(0,Math.round(100-(a.errors/Math.max(1,a.total))*70-(a.warns/Math.max(1,a.total))*25));
+      a.endpointList=Object.values(a.endpoints).map(function(e){
+        e.traceCount=Object.keys(e.traces).length;
+        e.flowList=Object.keys(e.flows).filter(Boolean);
+        return e;
+      }).sort(function(x,y){return(y.errors-x.errors)||(y.total-x.total);});
+      return a;
+    }).sort(function(x,y){return(y.errors-x.errors)||(y.total-x.total);});
+  }
+
+  /* ── render System Map ── */
+  function renderSystemMap(){
+    var apps=buildApps();
+    /* ensure toolbar with dropdown */
+    var fd=document.getElementById('flow-diagram');
+    if(!fd)return;
+    var panel=document.getElementById('ox24-sysmap-panel');
+    if(!panel){
+      fd.insertAdjacentHTML('beforebegin','<div id="ox24-sysmap-panel"></div>');
+      panel=document.getElementById('ox24-sysmap-panel');
+    }
+
+    /* API cards in app-health sidebar */
+    var ah=document.getElementById('app-health');
+    if(ah){
+      if(!apps.length){ah.innerHTML='<div class="ox24-empty">Upload logs to render API map.</div>';return;}
+      ah.innerHTML='<div class="ox22-app-list">'+apps.map(function(a){
+        return '<div class="ox22-app-card" data-app="'+esc(a.app)+'" onclick="ox24SelectApi(\''+esc(a.app)+'\')" style="cursor:pointer"><b>'+esc(a.app)+'</b><small>'+a.total.toLocaleString()+' logs · '+a.endpointList.length+' endpoints · '+a.errors+' errors · health '+a.health+'%</small></div>';
+      }).join('')+'</div>';
+    }
+
+    if(!apps.length)return;
+
+    /* build dropdown in panel */
+    var optHtml=apps.map(function(a){
+      return '<option value="'+esc(a.app)+'">'+esc(a.app)+' — '+a.endpointList.length+' endpoints · '+a.total.toLocaleString()+' logs</option>';
+    }).join('');
+    panel.innerHTML='<div class="ox24-api-header"><span class="ox24-label">API ▾</span><select id="ox24-api-select" onchange="ox24SelectApi(this.value)">'+optHtml+'</select></div><div id="ox24-detail"></div>';
+
+    /* pick first or already-selected */
+    var sel=document.getElementById('ox24-api-select');
+    var curApp=(sel&&sel.value)||apps[0].app;
+    /* highlight card */
+    document.querySelectorAll('.ox22-app-card').forEach(function(c){c.classList.toggle('active',c.getAttribute('data-app')===curApp);});
+    renderApiDetail(apps,curApp);
+  }
+
+  function renderApiDetail(apps,appName){
+    var a=apps.find(function(x){return x.app===appName;})||apps[0];
+    if(!a)return;
+    var detail=document.getElementById('ox24-detail');
+    if(!detail)return;
+
+    /* flow path: Client → API → top endpoints */
+    var flowNodes=['<span class="ox24-flow-node client">Client</span>','<span class="ox24-flow-arrow">→</span>','<span class="ox24-flow-node">'+esc(a.app)+'</span>'];
+    a.endpointList.slice(0,4).forEach(function(e){
+      flowNodes.push('<span class="ox24-flow-arrow">→</span>');
+      flowNodes.push('<span class="ox24-flow-node">'+esc(e.endpoint)+'</span>');
+    });
+    var flowHtml='<div class="ox24-flow-path">'+flowNodes.join('')+'</div>';
+
+    /* stat pills */
+    var statHtml='<div class="ox24-stat-row">'
+      +'<div class="ox24-stat-pill"><small>Logs</small><b>'+a.total.toLocaleString()+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Endpoints</small><b>'+a.endpointList.length+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#fb7185">Errors</small><b style="color:#fb7185">'+a.errors+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#fbbf24">Warnings</small><b style="color:#fbbf24">'+a.warns+'</b></div>'
+      +'<div class="ox24-stat-pill"><small style="color:#4ade80">Success</small><b style="color:#4ade80">'+a.success+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Traces</small><b>'+a.traceCount+'</b></div>'
+      +'<div class="ox24-stat-pill"><small>Health</small><b>'+a.health+'%</b></div>'
+    +'</div>';
+
+    /* endpoint cards */
+    var epHtml='<h3 style="margin:14px 0 10px;color:#e2e8f0">Endpoints <small style="color:#64748b;font-weight:400;font-size:13px">— click to open logs</small></h3>';
+    epHtml+='<div class="ox24-ep-grid">';
+    if(!a.endpointList.length){epHtml+='<div class="ox24-empty">No endpoints detected for this API.</div>';}
+    a.endpointList.forEach(function(e){
+      epHtml+='<div class="ox24-ep-card" onclick="ox24DrillEndpoint(\''+esc(a.app)+'\',\''+esc(e.endpoint)+'\')">';
+      epHtml+='<div class="ox24-ep-top"><span class="ox24-ep-name">'+esc(e.endpoint)+'</span>';
+      epHtml+='<div class="ox24-ep-badges">';
+      epHtml+='<span class="ox24-badge info">'+e.total+' logs</span>';
+      if(e.errors)epHtml+='<span class="ox24-badge err">'+e.errors+' errors</span>';
+      if(e.warns)epHtml+='<span class="ox24-badge warn">'+e.warns+' warns</span>';
+      if(e.success)epHtml+='<span class="ox24-badge ok">'+e.success+' success</span>';
+      epHtml+='<span class="ox24-badge info">'+e.traceCount+' traces</span>';
+      epHtml+='</div></div>';
+      if(e.flowList.length){
+        epHtml+='<div class="ox24-flow-chips">'+e.flowList.slice(0,6).map(function(f){return'<span class="ox24-flow-chip">'+esc(f)+'</span>';}).join('')+'</div>';
+      }
+      epHtml+='<div class="ox24-drill-note">Click to open matching logs in Log Search</div>';
+      epHtml+='</div>';
+    });
+    epHtml+='</div>';
+
+    detail.innerHTML=flowHtml+statHtml+epHtml;
+
+    /* sync app-health card highlight */
+    document.querySelectorAll('.ox22-app-card').forEach(function(c){c.classList.toggle('active',c.getAttribute('data-app')===a.app);});
+    /* update flow-diagram with mini flow */
+    var fd=document.getElementById('flow-diagram');
+    if(fd){
+      var nodes=['Client',a.app].concat(a.endpointList.slice(0,5).map(function(e){return e.endpoint;}));
+      fd.innerHTML='<div class="ox22-flowline">'+nodes.map(function(n,i){return'<span class="ox22-node">'+esc(n)+'</span>'+(i<nodes.length-1?'<span class="ox22-arrow">→</span>':'');}).join('')+'</div>';
+    }
+    /* update deps */
+    var deps=document.getElementById('deps');
+    if(deps)deps.innerHTML=a.depList.length?a.depList.map(function(d){return'<span class="chip">'+esc(d)+'</span>';}).join(''):'<span style="color:var(--tx3)">No dependency keywords detected.</span>';
+    /* update hints */
+    var hints=document.getElementById('flow-hints');
+    if(hints)hints.innerHTML='<b>'+esc(a.app)+'</b><br>'+a.endpointList.length+' endpoints · '+a.errors+' errors · '+a.warns+' warnings · '+a.traceCount+' traces<br><br>Select another API from the dropdown above, or click an endpoint to open only those logs.';
+  }
+
+  window.ox24SelectApi=function(appName){
+    var sel=document.getElementById('ox24-api-select');
+    if(sel)sel.value=appName;
+    renderApiDetail(buildApps(),appName);
+  };
+
+  window.ox24DrillEndpoint=function(appName,ep){
+    var filtered=rows().filter(function(r){return appOf(r)===appName&&endpoint(r)===ep;});
+    if(window.showSection)window.showSection('logs');
+    if(window.renderRows)window.renderRows(filtered);
+  };
+
+  /* ── Traffic Trend fix: ensure renderVisualDashboard always calls v23/ox23 pipeline ── */
+  /* The core issue: recomputeAggregate calls renderResult → renderVisualDashboard, but
+     at that moment ox22-trend-controls may not exist yet, so selectedRows() returns [].
+     Fix: override renderVisualDashboard to ALWAYS use v23SelectedRows if available, else fall back to _allRows. */
+  var _trendPatched=false;
+  function patchTrend(){
+    if(_trendPatched)return; _trendPatched=true;
+    var _prev=window.renderVisualDashboard;
+    window.renderVisualDashboard=function(d){
+      /* call original chain first (updates KPIs etc) */
+      if(_prev)try{_prev(d);}catch(e){}
+      /* now force-refresh trend with correct row set */
+      setTimeout(function(){
+        if(window.ox23RefreshDashboard)window.ox23RefreshDashboard();
+      },0);
+    };
+  }
+
+  /* Also patch recomputeAggregate to trigger ox23RefreshDashboard after it runs */
+  var _recompPatched=false;
+  function patchRecompute(){
+    if(_recompPatched)return; _recompPatched=true;
+    var _orig=window.recomputeAggregate;
+    if(typeof _orig!=='function')return;
+    window.recomputeAggregate=function(){
+      _orig.apply(this,arguments);
+      setTimeout(function(){if(window.ox23RefreshDashboard)window.ox23RefreshDashboard();},80);
+    };
+  }
+
+  /* Override renderFlow to use v24 system map */
+  window.renderFlow=function(){renderSystemMap();};
+  window.ox23RenderSystemMap=function(){renderSystemMap();};
+
+  /* Init */
+  document.addEventListener('DOMContentLoaded',function(){
+    setTimeout(function(){
+      patchTrend();
+      patchRecompute();
+      if(window.ox23EnsureControls)window.ox23EnsureControls();
+      else if(window.v23EnsureControls)window.v23EnsureControls();
+      if(window.ox23RefreshDashboard)window.ox23RefreshDashboard();
+      renderSystemMap();
+    },1200);
+  });
+  /* Also run immediately in case DOMContentLoaded already fired */
+  if(document.readyState!=='loading'){
+    setTimeout(function(){patchTrend();patchRecompute();renderSystemMap();},1400);
+  }
+})();
+</script>
