@@ -38,24 +38,12 @@ def api_rate_limited(key, limit=120, window=60):
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_secret_key = os.environ.get("SECRET_KEY", "")
-if not _secret_key:
-    _secret_key = secrets.token_hex(32)
-    app.logger.warning("SECRET_KEY env var is not set. Sessions will be invalidated on every restart. Set SECRET_KEY in Railway variables before production.")
-app.config["SECRET_KEY"] = _secret_key
-# Railway PostgreSQL
-_database_url = os.environ.get("DATABASE_URL", "sqlite:///observex.db").strip()
-if _database_url.startswith("postgres://"):
-    _database_url = _database_url.replace("postgres://", "postgresql://", 1)
-app.config["SQLALCHEMY_DATABASE_URI"] = _database_url
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+    "DATABASE_URL", "sqlite:///observex.db"
+).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", "280"))}
-if _database_url.startswith("postgresql"):
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"].update({"pool_size": int(os.environ.get("DB_POOL_SIZE", "5")), "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "10")), "connect_args": {"sslmode": os.environ.get("PGSSLMODE", "prefer")}})
-app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
-MAX_ANALYSE_LINES = int(os.environ.get("MAX_ANALYSE_LINES", "250000"))
-MAX_PERSIST_CHARS = int(os.environ.get("MAX_PERSIST_CHARS", "8000000"))
-SKIP_PERSIST_RAW = os.environ.get("SKIP_PERSIST_RAW", "0").lower() in {"1", "true", "yes"}
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
 
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -142,19 +130,6 @@ class AlertRule(db.Model):
     threshold  = db.Column(db.Float)
     active     = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
-
-class AlertFiring(db.Model):
-    id          = db.Column(db.Integer, primary_key=True)
-    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    rule_id     = db.Column(db.Integer, db.ForeignKey("alert_rule.id"), nullable=True)
-    rule_name   = db.Column(db.String(100), default="")
-    condition   = db.Column(db.String(100), default="")
-    value       = db.Column(db.Float, default=0)
-    threshold   = db.Column(db.Float, default=0)
-    session_id  = db.Column(db.Integer, default=0)
-    environment = db.Column(db.String(30), default="")
-    notified    = db.Column(db.Boolean, default=False)
-    fired_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 class CustomEnvironment(db.Model):
     id         = db.Column(db.Integer, primary_key=True)
@@ -390,47 +365,6 @@ def apply_retention_for_user(user):
     audit_event(user, "retention.apply", "LogSession", {"deleted_sessions": deleted, "days": pol.days})
     db.session.commit()
     return deleted
-
-
-def retention_preview(user):
-    pol = get_retention_policy(user)
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=max(1, int(pol.days or 30)))
-    old = LogSession.query.filter(LogSession.user_id == user.id, LogSession.created_at < cutoff).all()
-    keep = LogSession.query.filter(LogSession.user_id == user.id, LogSession.created_at >= cutoff).count()
-    return {"retention_days": pol.days, "cutoff": cutoff.strftime("%Y-%m-%d %H:%M"), "would_delete": len(old), "surviving": keep}
-
-def evaluate_alerts(user, log_session, result):
-    """Evaluate active alert rules after ingestion; store firing history and email destinations."""
-    fired = []
-    for rule in AlertRule.query.filter_by(user_id=user.id, active=True).all():
-        cond = (rule.condition or "").strip().lower()
-        if cond in {"errors", "error", "error_count"}:
-            value = float(result.get("errors", 0)); triggered = value > float(rule.threshold or 0)
-        elif cond in {"warnings", "warns", "warn", "warning_count"}:
-            value = float(result.get("warns", 0)); triggered = value > float(rule.threshold or 0)
-        elif cond in {"latency", "p95", "p95_latency"}:
-            value = float(result.get("p95", result.get("latency", 0))); triggered = value > float(rule.threshold or 0)
-        elif cond in {"health", "health_score"}:
-            value = float(result.get("health_score", 100)); triggered = value < float(rule.threshold or 0)
-        elif cond in {"severity", "incident_severity"}:
-            value = float((result.get("severity") or {}).get("score", 0)); triggered = value > float(rule.threshold or 0)
-        else:
-            continue
-        if triggered:
-            firing = AlertFiring(user_id=user.id, rule_id=rule.id, rule_name=rule.name or "Alert rule", condition=rule.condition or cond, value=value, threshold=float(rule.threshold or 0), session_id=log_session.id if log_session else 0, environment=(log_session.environment if log_session else result.get("environment", "")))
-            db.session.add(firing)
-            fired.append({"rule": firing.rule_name, "condition": firing.condition, "value": value, "threshold": firing.threshold})
-    if fired:
-        for dest in AlertDestination.query.filter_by(user_id=user.id, active=True).all():
-            if dest.kind == "email" and dest.target:
-                try:
-                    msg = Message("ObserveX alert fired", recipients=[dest.target])
-                    msg.body = "ObserveX alert(s) fired:\n" + "\n".join([f"- {x['rule']}: {x['condition']}={x['value']} threshold={x['threshold']}" for x in fired])
-                    mail.send(msg)
-                except Exception:
-                    app.logger.exception("Alert notification failed")
-        audit_event(user, "alert.fire", "ingestion", {"fired": fired})
-    return fired
 
 
 _db_init_lock = threading.Lock()
@@ -709,16 +643,13 @@ def mask_secrets(text: str):
 
 
 def persist_raw_upload(user_id: int, session_id: int, filename: str, raw: str):
-    """Persist a masked copy without slowing large uploads."""
-    if SKIP_PERSIST_RAW:
-        return None
+    """Persist masked raw logs to Railway volume for audit/re-open without keeping sensitive values."""
     safe_name = secure_filename(filename or "upload.log")[:120]
     user_dir = os.path.join(UPLOAD_DIR, str(user_id))
     os.makedirs(user_dir, exist_ok=True)
     path = os.path.join(user_dir, f"session-{session_id}-{safe_name}.masked.log")
-    text = raw if len(raw) <= MAX_PERSIST_CHARS else (raw[:MAX_PERSIST_CHARS] + "\n...[TRUNCATED_FOR_FAST_UPLOAD]...")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(mask_secrets(text))
+        fh.write(mask_secrets(raw))
     return path
 
 
@@ -759,22 +690,10 @@ def build_log_rows(records, env, filename=""):
                 except Exception:
                     lat = ""
         flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
-        # Endpoint-aware extraction: dashboards should group by business API, not Mule /processors/N paths.
-        api_method = extract_first([r"\]\.(get|post|put|patch|delete):", r"\b(GET|POST|PUT|PATCH|DELETE)\s+/"], line, "")
-        api_path = extract_first([
-            r"\]\.(?:get|post|put|patch|delete):\\([^:\]\s]+)",
-            r"\]\.(?:get|post|put|patch|delete):(/[^:\]\s]+)",
-            r'"RequestUri"\s*:\s*"([^"]+)"',
-            r'\b(?:GET|POST|PUT|PATCH|DELETE)\s+(/[^\s"\']+)'
-        ], line, "")
-        if api_path:
-            api_path = "/" + api_path.strip("/\\").replace("\\", "/")
-        flow_group = re.sub(r"/processors.*$", "", flow or "", flags=re.I)
         rows.append({
             "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
-            "event": trace, "flow": flow, "flow_group": flow_group, "api": api_path, "method": api_method.upper() if api_method else "",
-            "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
+            "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
             "message": mask_secrets(line), "is_multiline": "\n" in line
         })
     return rows
@@ -801,12 +720,6 @@ def row_matches_filters(row, filters):
     return True
 
 def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = ""):
-    truncated_for_speed = False
-    if MAX_ANALYSE_LINES > 0:
-        raw_lines = raw.splitlines()
-        if len(raw_lines) > MAX_ANALYSE_LINES:
-            raw = "\n".join(raw_lines[-MAX_ANALYSE_LINES:])
-            truncated_for_speed = True
     records = group_multiline_log_records(raw, filename)
     detected_env = infer_environment(raw[:5000], env)
     all_rows = build_log_rows(records, detected_env, filename)
@@ -966,8 +879,7 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         "flow": "Client → " + " → ".join(apps[:5]) + (" → External Dependencies" if deps else "") if apps else "",
         "error_lines": [r['message'] for r in errors[:50]], "slow_lines": [r['message'] for r in rows if r.get('latency',0)>3000][:50],
         "timeline": rows[:500],
-        "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11",
-        "truncated_for_speed": truncated_for_speed, "max_analyse_lines": MAX_ANALYSE_LINES
+        "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11"
     }
 
 def send_reset_email(user):
@@ -1216,19 +1128,13 @@ def analyse():
                         apps_found=",".join(result["apps"]))
         db.session.add(ls)
         db.session.commit()
-        # Persist masked raw logs in the background so large uploads do not block the response.
         try:
-            threading.Thread(target=persist_raw_upload, args=(user.id, ls.id, fname, raw), daemon=True).start()
+            persist_raw_upload(user.id, ls.id, fname, raw)
         except Exception:
-            app.logger.exception("Could not schedule upload persistence")
+            app.logger.exception("Could not persist upload to volume")
         duration_ms = int((time.time()-start_ms)*1000)
         db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
         audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
-        try:
-            result["alerts_fired"] = evaluate_alerts(user, ls, result)
-        except Exception:
-            app.logger.exception("Alert evaluation failed")
-            result["alerts_fired"] = []
         db.session.commit()
         result["session_id"] = ls.id
         result["stored"] = True
@@ -1317,11 +1223,6 @@ def api_ingest():
         app.logger.exception("Could not persist API ingestion to volume")
     db.session.add(QueryMetric(user_id=user.id, action="api_ingest", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(str(raw).encode("utf-8"))))
     audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "source": source, "total": result.get("total"), "errors": result.get("errors")})
-    try:
-        result["alerts_fired"] = evaluate_alerts(user, ls, result)
-    except Exception:
-        app.logger.exception("Alert evaluation failed")
-        result["alerts_fired"] = []
     db.session.commit()
     return jsonify({
         "status": "success",
@@ -1520,36 +1421,6 @@ def retention_apply():
     user = get_current_user()
     deleted = apply_retention_for_user(user)
     return jsonify({"status":"ok", "deleted_sessions": deleted})
-
-@app.route("/retention/status", methods=["GET"])
-@login_required
-def retention_status():
-    return jsonify(retention_preview(get_current_user()))
-
-@app.route("/alert-firings", methods=["GET"])
-@login_required
-def alert_firings():
-    user = get_current_user()
-    rows = AlertFiring.query.filter_by(user_id=user.id).order_by(AlertFiring.fired_at.desc()).limit(100).all()
-    return jsonify([{"id": r.id, "rule_id": r.rule_id, "rule_name": r.rule_name, "condition": r.condition, "value": r.value, "threshold": r.threshold, "session_id": r.session_id, "environment": r.environment, "notified": r.notified, "fired_at": r.fired_at.strftime("%Y-%m-%d %H:%M:%S")} for r in rows])
-
-@app.route("/activity/summary", methods=["GET"])
-@login_required
-def activity_summary():
-    user = get_current_user(); ws = ensure_default_workspace(user)
-    out = []
-    for m in WorkspaceMember.query.filter_by(workspace_id=ws.id).all():
-        u = db.session.get(User, m.user_id)
-        count = AuditEvent.query.filter_by(user_id=m.user_id).count()
-        last = AuditEvent.query.filter_by(user_id=m.user_id).order_by(AuditEvent.created_at.desc()).first()
-        out.append({"user_id": m.user_id, "name": u.name if u else "Unknown", "email": u.email if u else "", "role": m.role, "events": count, "last_activity": last.created_at.strftime("%Y-%m-%d %H:%M:%S") if last else None})
-    return jsonify(out)
-
-@app.route("/api-keys", methods=["GET"])
-@login_required
-def api_keys_status():
-    user = get_current_user()
-    return jsonify({"key_preview": "obsx_live_" + (user.api_key[-8:] if user.api_key else "not-set"), "created_for": user.email, "rotation_endpoint": "/profile/apikey", "docs": "/api/docs"})
 
 @app.route("/usage", methods=["GET"])
 @login_required
@@ -1763,7 +1634,7 @@ Content-Type: application/json
 @app.route("/demo/load", methods=["POST"])
 @login_required
 def demo_load():
-    sample = r"""INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
+    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
 ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling inventory service duration=3350
 WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
 INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200
@@ -1882,7 +1753,7 @@ def api_ingest_async():
             try:
                 u=db.session.get(User,uid); res=analyse_log_text(raw_text,"",env,appname)
                 ls=LogSession(user_id=uid, environment=env, filename=appname,total_lines=res["total"], error_count=res["errors"], warn_count=res["warns"], avg_latency=res["latency"], apps_found=",".join(res["apps"]))
-                db.session.add(ls); db.session.commit(); threading.Thread(target=persist_raw_upload, args=(uid,ls.id,appname,raw_text), daemon=True).start()
+                db.session.add(ls); db.session.commit(); persist_raw_upload(uid,ls.id,appname,raw_text)
                 j.status="success"; j.total_lines=res["total"]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
             except Exception as e:
                 j.status="failed"; j.error=str(e)[:2000]; j.finished_at=datetime.datetime.utcnow(); db.session.commit()
@@ -1903,9 +1774,8 @@ def rotate_api_key():
     if user is None:
         return jsonify({"error": "Session expired. Please login again."}), 401
     user.api_key = secrets.token_hex(32)
-    audit_event(user, "api_key.rotate", "profile", {})
     db.session.commit()
-    return jsonify({"api_key": user.api_key, "rotated_at": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+    return jsonify({"api_key": user.api_key})
 
 
 @app.route("/saved-searches", methods=["GET", "POST", "DELETE"])
