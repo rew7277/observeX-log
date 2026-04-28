@@ -1,50 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Register · ObserveX{% endblock %}
+{% block title %}Create account · ObserveX{% endblock %}
 {% block body %}
-<div style="min-height:100vh;display:grid;place-items:center;background:var(--bg);position:relative;overflow:hidden">
-  <div style="position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(124,58,237,.15) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none"></div>
-
-  <div style="width:100%;max-width:440px;padding:24px">
-    <div style="text-align:center;margin-bottom:28px">
-      <a href="{{ url_for('login') }}" style="display:inline-block">
-        <div style="width:52px;height:52px;border-radius:14px;background:var(--grad);display:inline-grid;place-items:center;font-size:24px;box-shadow:0 12px 36px rgba(90,94,247,.4);margin-bottom:12px">OX</div>
-      </a>
-      <div style="font-size:22px;font-weight:700;letter-spacing:-.03em">ObserveX</div>
-      <div style="color:var(--tx3);font-size:13px">Start analysing logs in seconds</div>
-    </div>
-
-    <div class="card" style="padding:28px">
-      <h2 style="font-size:18px;font-weight:700;margin-bottom:6px">Create your account</h2>
-      <p style="color:var(--tx2);font-size:13px;margin-bottom:24px">No credit card required</p>
-
-      <form method="POST">
-        <div style="margin-bottom:14px">
-          <label class="lbl">Full name</label>
-          <input class="input" type="text" name="name" placeholder="Ada Lovelace" required>
-        </div>
-        <div style="margin-bottom:14px">
-          <label class="lbl">Work email</label>
-          <input class="input" type="email" name="email" placeholder="you@company.com" required>
-        </div>
-        <div style="margin-bottom:14px">
-          <label class="lbl">Workspace name <span style="color:var(--tx3);font-weight:400;text-transform:none">(admin only)</span></label>
-          <input class="input" type="text" name="workspace_name" placeholder="Acme Production Ops">
-        </div>
-        <div style="margin-bottom:14px">
-          <label class="lbl">Invite code <span style="color:var(--tx3);font-weight:400;text-transform:none">(optional)</span></label>
-          <input class="input" type="text" name="invite_code" placeholder="Paste invite code to join workspace">
-        </div>
-        <div style="margin-bottom:20px">
-          <label class="lbl">Password <span style="color:var(--tx3);font-weight:400;text-transform:none">(min 8 chars)</span></label>
-          <input class="input" type="password" name="password" placeholder="••••••••" minlength="8" required>
-        </div>
-        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Create account →</button>
-      </form>
-
-      <p style="text-align:center;margin-top:18px;font-size:13px;color:var(--tx2)">
-        Already have an account? <a href="{{ url_for('login') }}">Sign in</a>
-      </p>
-    </div>
-  </div>
+<style>
+.login-shell{min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr;background:#070711;overflow:hidden}.login-left{position:relative;display:flex;flex-direction:column;justify-content:space-between;padding:38px 5vw;background:radial-gradient(circle at 20% 20%,rgba(124,58,237,.32),transparent 30%),radial-gradient(circle at 70% 70%,rgba(236,72,153,.18),transparent 34%),linear-gradient(180deg,#101025,#080812)}.login-left:before,.login-left:after{content:'';position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);box-shadow:0 0 32px rgba(124,58,237,.8)}.login-left:before{top:36%}.login-left:after{top:62%}.login-logo{display:flex;align-items:center;gap:14px;font-weight:900;font-size:20px;z-index:1}.login-mark{width:48px;height:48px;border-radius:14px;background:var(--grad);display:grid;place-items:center;box-shadow:0 14px 46px rgba(124,58,237,.48)}.login-copy{text-align:center;z-index:1}.live-badge{display:inline-flex;gap:8px;align-items:center;border:1px solid rgba(120,120,255,.35);background:rgba(90,94,247,.18);border-radius:999px;padding:8px 18px;color:#c4b5fd;font-weight:900}.login-copy h1{font-size:clamp(38px,5vw,64px);line-height:.96;letter-spacing:-.06em;margin:26px 0}.login-copy h1 span{background:var(--grad);-webkit-background-clip:text;color:transparent}.login-right{display:grid;place-items:center;padding:32px}.login-card{width:min(480px,100%)}.seg{display:grid;grid-template-columns:1fr 1fr;background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:5px;margin:24px 0}.seg a{padding:12px;text-align:center;border-radius:12px;color:var(--tx2);font-weight:900;text-decoration:none}.seg a.active{background:var(--sf3);color:#fff}.google-btn{width:100%;justify-content:center;background:#fff;color:#111;border:0}.divider{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;color:var(--tx3);font-weight:800;margin:18px 0}.divider:before,.divider:after{content:'';height:1px;background:var(--bd)}.mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.info-pills{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:18px}.info-pills span{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);padding:8px 10px;border-radius:999px;color:var(--tx2);font-size:12px;font-weight:800}@media(max-width:900px){.login-shell{grid-template-columns:1fr}.login-left{display:none}.mini-grid{grid-template-columns:1fr}}
+</style>
+<div class="login-shell">
+  <section class="login-left">
+    <a class="login-logo" href="/"><div class="login-mark">OX</div><div>ObserveX</div></a>
+    <div class="login-copy"><div class="live-badge"><span style="width:8px;height:8px;background:#22c55e;border-radius:50%;box-shadow:0 0 14px #22c55e"></span>AI-POWERED · NOW LIVE</div><h1>Create a workspace<br><span>for faster debugging.</span></h1><p style="color:var(--tx2);font-size:18px">Invite your team · Stream logs · Detect RCA · Share safely</p><div class="info-pills"><span>Admin access</span><span>Invite codes</span><span>Google login</span><span>PII masking</span></div></div>
+    <div style="color:var(--tx3);font-size:12px;z-index:1">© 2026 ObserveX</div>
+  </section>
+  <section class="login-right"><div class="login-card"><div style="display:flex;align-items:center;gap:12px;margin-bottom:24px"><div class="login-mark" style="width:44px;height:44px">OX</div><b style="font-size:20px">ObserveX</b></div><h1 style="font-size:42px;letter-spacing:-.06em;line-height:1">Create account.</h1><p style="color:var(--tx2);font-size:16px;margin-top:8px">Start your log intelligence workspace.</p><div class="seg"><a href="/login">Sign In</a><a class="active" href="/register">Create Account</a></div>
+    <form method="POST">
+      <div class="mini-grid"><div><label class="lbl">Full name</label><input class="input" type="text" name="name" placeholder="Ada Lovelace" required></div><div><label class="lbl">Work email</label><input class="input" type="email" name="email" placeholder="you@company.com" required></div></div>
+      <div style="margin-top:14px"><label class="lbl">Workspace name <span style="color:var(--tx3);font-weight:400;text-transform:none">admin creates workspace</span></label><input class="input" type="text" name="workspace_name" placeholder="Acme Production Ops"></div>
+      <div style="margin-top:14px"><label class="lbl">Invite code <span style="color:var(--tx3);font-weight:400;text-transform:none">optional for developer/viewer access</span></label><input class="input" type="text" name="invite_code" placeholder="Paste invite code to join workspace"></div>
+      <div style="margin-top:14px"><label class="lbl">Password <span style="color:var(--tx3);font-weight:400;text-transform:none">min 8 chars</span></label><input class="input" type="password" name="password" placeholder="••••••••" minlength="8" required></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:18px;font-size:15px;padding:15px">Create account →</button>
+    </form>
+    <div class="divider">OR</div><a class="btn google-btn" href="{{ url_for('google_login') }}"><span style="font-weight:900;color:#4285f4">G</span> Continue with Google</a>
+    <p style="text-align:center;margin-top:18px;font-size:13px;color:var(--tx2)">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
+  </div></section>
 </div>
 {% endblock %}
