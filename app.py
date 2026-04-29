@@ -223,6 +223,7 @@ class ApiFlowMap(db.Model):
     endpoint        = db.Column(db.String(300), default="")
     method          = db.Column(db.String(10), default="")
     flow_steps_json = db.Column(db.Text, default="[]")   # ["Client","Mule API","CBS","Response"]
+    architecture_json = db.Column(db.Text, default="{}")  # tiered nodes, edges, traces and call matrix
     request_count   = db.Column(db.Integer, default=0)
     error_count     = db.Column(db.Integer, default=0)
     avg_latency_ms  = db.Column(db.Integer, default=0)
@@ -490,6 +491,7 @@ def ensure_runtime_columns():
             # Log persistence columns
             "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS log_rows_json TEXT DEFAULT '[]'",
             "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS result_json TEXT DEFAULT '{}'",
+            "ALTER TABLE api_flow_map ADD COLUMN IF NOT EXISTS architecture_json TEXT DEFAULT '{}'",
         ]
     else:
         existing_user = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
@@ -500,6 +502,11 @@ def ensure_runtime_columns():
             existing_ls = {row[1] for row in db.session.execute(text("PRAGMA table_info(log_session)")).fetchall()}
             if "log_rows_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN log_rows_json TEXT DEFAULT '[]'")
             if "result_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN result_json TEXT DEFAULT '{}'")
+        except Exception:
+            pass
+        try:
+            existing_afm = {row[1] for row in db.session.execute(text("PRAGMA table_info(api_flow_map)")).fetchall()}
+            if "architecture_json" not in existing_afm: stmts.append("ALTER TABLE api_flow_map ADD COLUMN architecture_json TEXT DEFAULT '{}'")
         except Exception:
             pass
     for stmt in stmts:
@@ -1039,104 +1046,165 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
 
 
 # ── System Map extraction ─────────────────────────────────────────────────────
-def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id: int):
-    """
-    From analysed log rows, extract per-API, per-endpoint flow maps.
-    Returns a list of ApiFlowMap objects (unsaved) ready to db.session.add().
-    """
-    # 1. Group rows by detected API name
-    api_groups: dict = {}
-    for r in rows:
-        api = (r.get("app") or "unknown").strip()
-        api_groups.setdefault(api, []).append(r)
 
-    # Endpoint extraction patterns (URI paths)
+def _clean_service_name(value: str) -> str:
+    """Convert noisy log processor names into readable architecture nodes."""
+    s = str(value or '').strip().strip('"\'[]{}(),;')
+    s = re.sub(r'\\[tnr]', ' ', s)
+    s = re.sub(r'processors?/\d+', '', s, flags=re.I)
+    s = re.sub(r'/(?:processors?|subflows?)/?\d*', '', s, flags=re.I)
+    s = re.sub(r'\b(?:before|after)\s+request\s+to\s+', '', s, flags=re.I)
+    s = re.sub(r'\b(?:INFO|DEBUG|WARN|ERROR|SUCCESS|FAILURE)\b.*$', '', s, flags=re.I)
+    s = re.sub(r'[^A-Za-z0-9_./:-]+', '-', s)
+    s = re.sub(r'-{2,}', '-', s).strip('-_./:')
+    if not s or len(s) < 2:
+        return ''
+    if len(s) > 48:
+        s = s[:48].rstrip('-_./:')
+    return s
+
+
+def _service_tier(name: str) -> str:
+    low = (name or '').lower()
+    if any(x in low for x in ('client','browser','mobile','postman','consumer')): return 'Client'
+    if any(x in low for x in ('gateway','proxy','apigee','nginx','loadbalancer','lb')): return 'Gateway'
+    if any(x in low for x in ('api','mule','experience','process','s-')): return 'API'
+    if any(x in low for x in ('flow','service','engine','processor','subflow','payment','loan','customer','auth')): return 'Service'
+    if any(x in low for x in ('oracle','postgres','mysql','mongo','redis','db','database','cache')): return 'Data'
+    if any(x in low for x in ('salesforce','cbs','flexcube','kafka','s3','lambda','external','vendor','http')): return 'External'
+    return 'Service'
+
+
+def _normalise_endpoint(endpoint: str) -> str:
+    ep = str(endpoint or '').split('?')[0].strip()
+    if not ep or ep == '__root__': return '/'
+    ep = re.sub(r'/\d+(?=/|$)', '/{id}', ep)
+    ep = re.sub(r'/[0-9a-fA-F-]{8,}(?=/|$)', '/{id}', ep)
+    return ep[:220]
+
+
+def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = '', endpoint: str = '') -> dict:
+    """Build an architecture-level topology from logs: tiered nodes, edges, trace waterfall and call matrix."""
+    node_map, edge_map, traces = {}, {}, {}
+    def add_node(name, tier=None, row=None):
+        name = _clean_service_name(name)
+        if not name: return ''
+        tier = tier or _service_tier(name)
+        n = node_map.setdefault(name, {"id": name, "name": name, "tier": tier, "count": 0, "errors": 0, "warns": 0, "latencies": []})
+        n['count'] += 1
+        if row:
+            n['errors'] += 1 if row.get('level') in ('ERROR','FAILURE') else 0
+            n['warns'] += 1 if row.get('level') == 'WARN' else 0
+            if row.get('latency'): n['latencies'].append(int(row.get('latency') or 0))
+        return name
+    def add_edge(src, dst, row=None, label='calls'):
+        src, dst = add_node(src, row=row), add_node(dst, row=row)
+        if not src or not dst or src == dst: return
+        key = (src, dst)
+        e = edge_map.setdefault(key, {"from": src, "to": dst, "count": 0, "errors": 0, "latencies": [], "label": label})
+        e['count'] += 1
+        if row:
+            e['errors'] += 1 if row.get('level') in ('ERROR','FAILURE') else 0
+            if row.get('latency'): e['latencies'].append(int(row.get('latency') or 0))
+    # regexes for MuleSoft/API logs and common microservice logs
+    flow_re = re.compile(r'(?:flow(?:Name)?|subflow|processor|route)\s*[=:]\s*["\']?([A-Za-z0-9_.:/-]{3,120})', re.I)
+    before_re = re.compile(r'before\s+request\s+to\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
+    after_re = re.compile(r'after\s+request\s+to\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
+    call_re = re.compile(r'\b(?:calling|call to|request to|response from|connect(?:ing)? to)\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
+    app_re = re.compile(r'(?:application|app|service|api)\s*[=:]\s*["\']?([A-Za-z0-9_.:/-]{3,80})', re.I)
+    for idx, r in enumerate(rows or []):
+        msg = r.get('message','') or ''
+        app = _clean_service_name(r.get('app') or api_name or 'Unknown API') or 'Unknown API'
+        ep = _normalise_endpoint(endpoint or r.get('flow') or '')
+        current = add_node(app, 'API', r)
+        ordered = [current]
+        for regex in (app_re, flow_re, before_re, call_re, after_re):
+            for m in regex.finditer(msg):
+                name = _clean_service_name(m.group(1))
+                if name and name.lower() not in [x.lower() for x in ordered]:
+                    ordered.append(name)
+        # Keep architecture readable: app -> detected hops -> response
+        if len(ordered) == 1 and ep and ep != '/':
+            ordered.append(ep)
+        if ordered:
+            add_node('Client', 'Client', r)
+            add_edge('Client', ordered[0], r, 'entry')
+            for a,b in zip(ordered, ordered[1:]): add_edge(a,b,r,'calls')
+            add_node('Response', 'Client', r)
+            add_edge(ordered[-1], 'Response', r, 'returns')
+        trace = r.get('trace') or r.get('event') or ''
+        if trace:
+            tr = traces.setdefault(trace, {"trace": trace, "rows": [], "errors": 0, "latency": 0, "endpoint": ep, "api": app})
+            tr['rows'].append({"time": r.get('time',''), "service": ordered[-1] if ordered else app, "level": r.get('level',''), "message": msg[:240], "latency": int(r.get('latency') or 0)})
+            tr['errors'] += 1 if r.get('level') in ('ERROR','FAILURE') else 0
+            tr['latency'] = max(tr['latency'], int(r.get('latency') or 0))
+    nodes=[]
+    for n in node_map.values():
+        lats=n.pop('latencies', [])
+        n['avg_latency_ms']=round(sum(lats)/len(lats)) if lats else 0
+        n['health']='critical' if n['errors'] else 'warn' if n['warns'] else 'ok'
+        nodes.append(n)
+    edges=[]
+    for e in edge_map.values():
+        lats=e.pop('latencies', [])
+        e['avg_latency_ms']=round(sum(lats)/len(lats)) if lats else 0
+        e['error_rate']=round(e['errors']/max(1,e['count'])*100,1)
+        edges.append(e)
+    tier_order={"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}
+    nodes.sort(key=lambda n:(tier_order.get(n['tier'],9), n['name']))
+    edges.sort(key=lambda e:-e['count'])
+    trace_list=sorted(traces.values(), key=lambda t:(-t['errors'], -t['latency'], -len(t['rows'])))[:12]
+    matrix=[]
+    for e in edges[:60]:
+        matrix.append({"from":e['from'],"to":e['to'],"calls":e['count'],"errors":e['errors'],"avg_latency_ms":e['avg_latency_ms'],"error_rate":e['error_rate']})
+    return {"nodes": nodes, "edges": edges, "traces": trace_list, "matrix": matrix, "tiers": sorted(set(n['tier'] for n in nodes), key=lambda x:tier_order.get(x,9))}
+
+
+def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id: int):
+    """Extract API endpoint maps plus a tiered architecture graph for each endpoint."""
+    api_groups = {}
+    for r in rows:
+        api = _clean_service_name(r.get('app') or 'unknown') or 'unknown'
+        api_groups.setdefault(api, []).append(r)
     uri_patterns = [
-        r'"uri"\s*:\s*"(/[^"]+)"',
-        r'"path"\s*:\s*"(/[^"]+)"',
-        r'"requestUri"\s*:\s*"(/[^"]+)"',
-        r'(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s?"]+)',
-        r'(?:uri|url|path|endpoint)\s*[=:]\s*["\']?(/[A-Za-z0-9/_\-\.]+)',
+        r'"uri"\s*:\s*"(/[^"]+)"', r'"path"\s*:\s*"(/[^"]+)"', r'"requestUri"\s*:\s*"(/[^"]+)"',
+        r'(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s?"]+)', r'(?:uri|url|path|endpoint)\s*[=:]\s*["\']?(/[A-Za-z0-9/_\-.]+)'
     ]
     method_pattern = re.compile(r'\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b', re.I)
-    # Flow-step service name heuristics
-    flow_step_patterns = [
-        r'before request to ([A-Za-z0-9_\-\.]+)',
-        r'after request to ([A-Za-z0-9_\-\.]+)',
-        r'"FlowName"\s*:\s*"([^"]+)"',
-        r'processor:\s*([^;\]\n]+)',
-        r'\b(Mule|MuleSoft|CBS|Flexcube|Payment[A-Za-z]*|Oracle|Kafka|Redis|Mongo|Postgres|S3|Lambda|Gateway|Proxy|Cache|Auth)\w*\b',
-    ]
-
-    flow_maps = []
+    flow_maps=[]
     for api_name, api_rows in api_groups.items():
-        if api_name == "unknown" and len(api_groups) > 1:
+        if api_name == 'unknown' and len(api_groups) > 1:
             continue
-
-        # Group by endpoint
-        endpoint_groups: dict = {}
+        endpoint_groups={}
         for r in api_rows:
-            msg = r.get("message", "")
-            ep = ""
+            msg=r.get('message','') or ''
+            ep=''
             for pat in uri_patterns:
-                m = re.search(pat, msg, re.I)
+                m=re.search(pat,msg,re.I)
                 if m:
-                    # Normalise: strip query params, limit length
-                    ep = m.group(1).split("?")[0][:200]
-                    break
-            endpoint_groups.setdefault(ep or "__root__", []).append(r)
-
+                    ep=_normalise_endpoint(m.group(1)); break
+            if not ep:
+                ep=_normalise_endpoint(r.get('flow') or '/')
+            endpoint_groups.setdefault(ep or '/', []).append(r)
         for endpoint, ep_rows in endpoint_groups.items():
-            # Method detection
-            method = ""
-            for r in ep_rows[:20]:
-                mm = method_pattern.search(r.get("message", ""))
-                if mm:
-                    method = mm.group(1).upper()
-                    break
-
-            # Flow steps: extract service names in order of first appearance
-            step_set_ordered: list = []
-            seen_steps: set = set()
-            all_msg = " ".join(r.get("message", "") for r in ep_rows)
-            for pat in flow_step_patterns:
-                for m in re.finditer(pat, all_msg, re.I):
-                    step = m.group(1).strip()[:60]
-                    step_clean = re.sub(r'\s+', ' ', step).strip()
-                    if step_clean and step_clean.lower() not in seen_steps and len(step_clean) > 2:
-                        seen_steps.add(step_clean.lower())
-                        step_set_ordered.append(step_clean)
-            # Build canonical flow: Client → [detected steps] → Response
-            flow_steps = ["Client"] + step_set_ordered[:8]
-            if api_name not in flow_steps:
-                flow_steps.insert(1, api_name)
-            if "Response" not in flow_steps:
-                flow_steps.append("Response")
-
-            # Stats
-            req_count = len(ep_rows)
-            err_count = sum(1 for r in ep_rows if r.get("level") in ("ERROR", "FAILURE"))
-            lats = [r["latency"] for r in ep_rows if r.get("latency")]
-            avg_lat = round(sum(lats) / len(lats)) if lats else 0
-            sample_trace = next((r.get("trace") or r.get("event") for r in ep_rows if r.get("trace") or r.get("event")), "")
-
-            fm = ApiFlowMap(
-                user_id=user_id,
-                session_id=session_id,
-                api_name=api_name,
-                environment=env,
-                endpoint="" if endpoint == "__root__" else endpoint,
-                method=method,
-                flow_steps_json=json.dumps(flow_steps),
-                request_count=req_count,
-                error_count=err_count,
-                avg_latency_ms=avg_lat,
-                sample_trace_id=sample_trace[:120] if sample_trace else "",
-            )
-            flow_maps.append(fm)
-
+            method=''
+            for r in ep_rows[:30]:
+                mm=method_pattern.search(r.get('message','') or '')
+                if mm: method=mm.group(1).upper(); break
+            arch=extract_architecture_graph(ep_rows, raw, env, session_id, user_id, api_name, endpoint)
+            # derive a clean linear fallback flow from the graph, not raw processor fragments
+            flow_steps=['Client']
+            for n in arch.get('nodes',[]):
+                if n['name'] not in flow_steps and n['name'] != 'Response':
+                    flow_steps.append(n['name'])
+            if 'Response' not in flow_steps: flow_steps.append('Response')
+            req_count=len(ep_rows)
+            err_count=sum(1 for r in ep_rows if r.get('level') in ('ERROR','FAILURE'))
+            lats=[int(r.get('latency') or 0) for r in ep_rows if r.get('latency')]
+            avg_lat=round(sum(lats)/len(lats)) if lats else 0
+            sample_trace=next((r.get('trace') or r.get('event') for r in ep_rows if r.get('trace') or r.get('event')), '')
+            flow_maps.append(ApiFlowMap(user_id=user_id, session_id=session_id, api_name=api_name, environment=env, endpoint=endpoint if endpoint != '/' else '', method=method, flow_steps_json=json.dumps(flow_steps[:14]), architecture_json=json.dumps(arch, default=str), request_count=req_count, error_count=err_count, avg_latency_ms=avg_lat, sample_trace_id=(sample_trace or '')[:120]))
     return flow_maps
-
 
 def send_reset_email(user):
     token   = secrets.token_urlsafe(40)
@@ -1897,6 +1965,7 @@ def api_system_map():
                 "endpoint":       ep_key,
                 "method":         r.method,
                 "flow_steps":     json.loads(r.flow_steps_json or "[]"),
+                "architecture":   json.loads(r.architecture_json or "{}"),
                 "request_count":  r.request_count,
                 "error_count":    r.error_count,
                 "avg_latency_ms": r.avg_latency_ms,
@@ -1911,6 +1980,25 @@ def api_system_map():
             ep["error_count"]   += r.error_count
             if r.avg_latency_ms:
                 ep["avg_latency_ms"] = round((ep["avg_latency_ms"] + r.avg_latency_ms) / 2)
+            # Merge architecture graphs from repeated uploads for the same endpoint.
+            try:
+                arch = json.loads(r.architecture_json or "{}")
+                cur = ep.setdefault("architecture", {"nodes": [], "edges": [], "traces": [], "matrix": [], "tiers": []})
+                seen_nodes = {n.get("id") or n.get("name") for n in cur.get("nodes", [])}
+                for n in arch.get("nodes", []):
+                    nid = n.get("id") or n.get("name")
+                    if nid not in seen_nodes:
+                        cur.setdefault("nodes", []).append(n); seen_nodes.add(nid)
+                seen_edges = {(e.get("from"), e.get("to")) for e in cur.get("edges", [])}
+                for e in arch.get("edges", []):
+                    k = (e.get("from"), e.get("to"))
+                    if k not in seen_edges:
+                        cur.setdefault("edges", []).append(e); seen_edges.add(k)
+                cur["traces"] = (cur.get("traces", []) + arch.get("traces", []))[:12]
+                cur["matrix"] = (cur.get("matrix", []) + arch.get("matrix", []))[:80]
+                cur["tiers"] = sorted(set(cur.get("tiers", []) + arch.get("tiers", [])))
+            except Exception:
+                pass
 
     result = []
     for api_name, data in api_map.items():
@@ -1924,6 +2012,14 @@ def api_system_map():
         })
     result.sort(key=lambda x: -x["total_requests"])
     return jsonify({"apis": result, "total_apis": len(result)})
+
+
+
+@app.route("/api/v1/architecture", methods=["GET"])
+@login_required
+def api_architecture():
+    """Return the same data as system-map, with architecture graphs included for UI consumers."""
+    return api_system_map()
 
 
 @app.route("/api/v1/logs/search", methods=["GET"])
