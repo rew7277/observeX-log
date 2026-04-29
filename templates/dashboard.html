@@ -52,6 +52,32 @@
   <div id="arch-panel-matrix" class="arch-panel"><div id="arch-matrix">Select an endpoint to see service call matrix.</div></div>
   <div id="arch-panel-overview" class="arch-panel"><div class="two"><div><h3>API overview</h3><div id="sm-api-overview">Upload logs to see API overview.</div></div><div><h3>Endpoints</h3><div id="sm-endpoint-list">Select an API to see endpoints.</div></div></div></div>
 </div>
+<div class="card" style="margin-top:14px">
+  <h3>🗂 API Registry / Manual Flow Builder</h3>
+  <p style="color:var(--tx2);font-size:13px;margin-top:6px">Maintain API owner, base URL, endpoints and downstream systems. This manual map is merged with uploaded logs, so System Map will not depend only on auto-detection.</p>
+  <div class="toolbar" style="margin-top:12px">
+    <input id="reg-api-name" class="input" placeholder="API name e.g. s-paymentengine-api">
+    <select id="reg-env" class="select-styled env-select"><option>PROD</option><option>UAT</option><option>SIT</option><option>DEV</option><option>DR</option></select>
+    <input id="reg-base-url" class="input" placeholder="Base URL">
+    <input id="reg-owner" class="input" placeholder="Owner / Team">
+    <input id="reg-downstreams" class="input" placeholder="Downstream systems comma separated">
+  </div>
+  <div class="toolbar" style="margin-top:10px">
+    <textarea id="reg-endpoints" class="input mono" rows="3" style="min-width:420px" placeholder="Endpoints, one per line. Example:&#10;GET /loan/details&#10;POST /payment/initiate"></textarea>
+    <button class="btn btn-primary" onclick="saveApiRegistry()">Save Registry</button>
+    <button class="btn btn-ghost" onclick="loadApiRegistry()">Refresh Registry</button>
+  </div>
+  <div id="api-registry-list" class="table-wrap" style="margin-top:14px;color:var(--tx2)">Loading registry…</div>
+</div>
+<div class="three" style="margin-top:14px">
+  <div class="card"><h3>Flow Confidence</h3><div id="flow-confidence" class="node-card">Select an endpoint to calculate confidence.</div></div>
+  <div class="card"><h3>Error Ownership</h3><div id="error-ownership" class="node-card">Mapped from owner + downstream system + error source.</div></div>
+  <div class="card"><h3>Endpoint SLA</h3><div id="endpoint-sla" class="node-card">Avg/P95 latency and error percentage will appear here.</div></div>
+</div>
+<div class="two" style="margin-top:14px">
+  <div class="card"><h3>Trace Comparison</h3><div id="trace-comparison" style="color:var(--tx2)">Select an endpoint to compare failed vs successful traces.</div></div>
+  <div class="card"><h3>Smart RCA</h3><div id="smart-rca" style="color:var(--tx2)">Select an endpoint to generate ownership and fix hints.</div></div>
+</div>
 <div class="two" style="margin-top:14px"><div class="card"><h3>Dependencies</h3><div id="deps">—</div></div><div class="card"><h3>System Map Hints</h3><div id="flow-hints">—</div></div></div>
 <div class="three"><div class="card"><h3>App Health</h3><div id="app-health">—</div></div><div class="card"><h3>Error Timeline</h3><div id="error-timeline" class="mini-bars">—</div></div><div class="card"><h3>Business & Security Signals</h3><div id="business-signals">—</div><div id="security-signals" style="margin-top:8px">—</div></div></div>
 <div id="arch-tooltip" class="arch-tooltip"></div>
@@ -103,31 +129,17 @@ Railway volume: set OBSERVEX_DATA_DIR=/data and mount a volume at /data.</pre></
 
 <section id="sec-compliance" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🛡 SaaS, Compliance & Cost Control</div><div class="page-sub">Tenant isolation, retention, audit trail, usage visibility, alert destinations, and storage strategy.</div></div><div class="system-grid"><div class="card"><h3>Workspace & Role</h3><div class="toolbar" style="margin-top:12px"><input id="workspace-name" class="input" placeholder="Workspace name"><select id="workspace-plan" class="select-styled"><option>starter</option><option>growth</option><option>business</option><option>enterprise</option></select><button class="btn btn-primary" onclick="saveSaasSettings()">Save</button></div><div id="workspace-info" class="node-card">Loading...</div></div><div class="card"><h3>Retention Policy</h3><div class="toolbar" style="margin-top:12px"><input id="retention-days" type="number" class="input" placeholder="30" min="1" max="3650"><label style="color:var(--tx2);font-size:12px"><input id="masked-only" type="checkbox" checked> Masked logs only</label><label style="color:var(--tx2);font-size:12px"><input id="encrypted-raw" type="checkbox"> Encrypted raw logs</label><button class="btn btn-ghost" onclick="applyRetention()">Apply Cleanup</button></div><div id="retention-info" class="node-card">Loading...</div></div><div class="card"><h3>Usage / Cost Control</h3><div id="usage-info">Loading...</div></div><div class="card"><h3>Alert Destinations</h3><div class="toolbar" style="margin-top:12px"><select id="dest-kind" class="select-styled"><option>email</option><option>slack</option><option>teams</option><option>webhook</option></select><input id="dest-target" class="input" placeholder="email, webhook URL, Slack/Teams URL"><button class="btn btn-primary" onclick="createDestination()">Add</button></div><div id="destinations-list" style="margin-top:12px">Loading...</div></div></div><div class="card" style="margin-top:14px"><h3>Audit Logs</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Target</th><th>IP</th></tr></thead><tbody id="audit-body"><tr><td colspan="4">Loading...</td></tr></tbody></table></div></div></section>
 <section id="sec-settings" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">⚙ Settings</div><div class="page-sub">Manage environments. These values reflect in Dashboard and Log Search.</div></div><div class="card"><h3>Environments</h3><div class="toolbar" style="margin-top:12px"><input id="new-env" class="input" placeholder="Example: PERF, QA, CLIENT_A"><button class="btn btn-primary" onclick="addEnvironment()">Add Environment</button></div><div id="env-list" class="env-list"></div></div><div class="card" style="margin-top:14px"><h3>Plan & Role</h3><div class="node-card"><b>{{ workspace.plan if workspace else "starter" }}</b><div style="color:var(--tx2);font-size:12px">Workspace: {{ workspace.name if workspace else "Default" }} · Role: {{ role }}</div><div style="color:var(--tx3);font-size:12px">Limits: {{ limits.storage_gb }} GB storage · {{ limits.ingestion_gb_month }} GB/month ingestion · {{ limits.users }} users · {{ limits.retention_days }} days retention · {{ limits.alerts }} alerts</div></div></div>{% if role == "Admin" %}<div class="card" style="margin-top:14px"><h3>Admin Access</h3><p style="color:var(--tx2);font-size:13px">Only Admins can manage invite codes, roles, workspace plan, retention and destructive deletion.</p><div class="toolbar"><select id="invite-role" class="select-styled"><option>Developer</option><option>Viewer</option><option>Auditor</option><option>Admin</option></select><button class="btn btn-primary" onclick="createInvite()">Create Invite Code</button></div><div id="invite-list" class="env-list"></div><h3 style="margin-top:18px">Members</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead><tbody id="members-body"><tr><td colspan="3">Loading...</td></tr></tbody></table></div></div>{% endif %}<div class="card" style="margin-top:14px"><h3>Security & Masking</h3><p style="color:var(--tx2)">ObserveX masks JWTs, bearer tokens, API keys, Aadhaar, PAN, mobile numbers, emails, customer names, loan/account/customer/checkout IDs, BBPS IDs, UPI/VPA and common secrets before rendering logs, exporting CSV, storing volume copies, or returning API responses.</p><p style="color:var(--tx3);font-size:12px">For production SaaS: store only masked logs by default; allow encrypted raw retention only as an enterprise admin setting.</p></div></section>
-<!-- ── Missing section stubs (prevent showSection null-style crash) ──────── -->
+<!-- ── Reliability section panels ───────────────────────────────────────── -->
 <section id="sec-onboarding" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">🚦 Onboarding</div><div class="page-sub">Quick-start guide for ingesting your first logs.</div></div>
-  <div class="card"><div id="onboarding-content" style="color:var(--tx2)">Loading onboarding guide…</div></div>
+  <div class="page-header"><div class="page-title">🚦 Onboarding</div><div class="page-sub">Guided setup and upload quality checks for production log ingestion.</div></div>
+  <div class="two"><div class="card"><h3>Quick Start</h3><div id="onboarding-content" style="color:var(--tx2)">Loading onboarding guide…</div></div><div class="card"><h3>Upload Quality Check</h3><div id="upload-quality" class="node-card">Upload logs to see APIs detected, trace coverage, unknown lines and parsing confidence.</div></div></div>
 </section>
-<section id="sec-health" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">🛡 Source Health</div><div class="page-sub">Live status of all connected log sources and connectors.</div></div>
-  <div class="card"><div id="source-health-content" style="color:var(--tx2)">Loading source health…</div></div>
-</section>
-<section id="sec-performance" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">⚡ Performance</div><div class="page-sub">Latency distributions, P95/P99 breakdowns and throughput trends.</div></div>
-  <div class="card"><div id="performance-content" style="color:var(--tx2)">Upload logs to render performance metrics.</div></div>
-</section>
-<section id="sec-customdash" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">📊 Custom Dashboards</div><div class="page-sub">Build and pin widget-based views for your team.</div></div>
-  <div class="card"><div id="widgets-content" style="color:var(--tx2)">Loading widgets…</div></div>
-</section>
-<section id="sec-incidents" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">🚨 Incidents</div><div class="page-sub">Open, acknowledged and resolved incidents derived from log signals.</div></div>
-  <div class="card"><div id="incidents-content" style="color:var(--tx2)">Loading incidents…</div></div>
-</section>
-<section id="sec-metrics" class="section-panel" style="display:none">
-  <div class="page-header"><div class="page-title">📈 Log Metrics</div><div class="page-sub">Aggregated counters and rates computed from ingested log data.</div></div>
-  <div class="card"><div id="metrics-content" style="color:var(--tx2)">Loading log metrics…</div></div>
-</section>
+<section id="sec-health" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🛡 Source Health</div><div class="page-sub">Connector health, ingestion jobs and source freshness.</div></div><div class="card"><div id="source-health-content" style="color:var(--tx2)">Loading source health…</div></div></section>
+<section id="sec-performance" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">⚡ Performance</div><div class="page-sub">Request latency, parser runtime, throughput and API SLA signals.</div></div><div class="card"><div id="performance-content" style="color:var(--tx2)">Loading performance metrics…</div></div></section>
+<section id="sec-customdash" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">📊 Custom Dashboards</div><div class="page-sub">Pin operational widgets for errors, latency, traces, ingestion and health.</div></div><div class="card"><div class="toolbar"><select id="widget-type" class="select-styled"><option>Errors</option><option>Latency</option><option>Trace Coverage</option><option>Applications</option><option>Ingestion</option><option>Health</option></select><input id="widget-title" class="input" placeholder="Widget title"><button class="btn btn-primary" onclick="createWidget()">Add Widget</button></div><div id="widgets-content" class="actions-grid" style="margin-top:14px;color:var(--tx2)">Loading widgets…</div></div></section>
+<section id="sec-incidents" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🚨 Incidents</div><div class="page-sub">Create, acknowledge and resolve incidents derived from log signals.</div></div><div class="card"><div class="toolbar"><input id="incident-title" class="input" placeholder="Incident title"><input id="incident-owner" class="input" placeholder="Owner / team"><select id="incident-status" class="select-styled"><option>Open</option><option>Acknowledged</option><option>Resolved</option></select><button class="btn btn-primary" onclick="createIncident()">Create Incident</button></div><div id="incidents-content" style="margin-top:14px;color:var(--tx2)">Loading incidents…</div></div></section>
+<section id="sec-metrics" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">📈 Log Metrics</div><div class="page-sub">Aggregated counters, anomaly baseline and retention guidance.</div></div><div class="card"><div id="metrics-content" style="color:var(--tx2)">Loading log metrics…</div></div><div class="card" style="margin-top:14px"><h3>Data Retention</h3><p style="color:var(--tx2)">Recommended: keep indexed metrics and masked rows longer; delete raw files after 30/60/90 days based on plan.</p><button class="btn btn-ghost btn-sm" onclick="applyRetention()">Run Retention Cleanup</button></div></section>
+
 </main></div>
 
 <!-- ── Log detail modal ──────────────────────────────────────────────────── -->
@@ -228,23 +240,24 @@ async function loadSystemMap(){
   let env=document.getElementById('sm-env-filter')?.value||'';
   let url='/api/v1/system-map'+(env?'?env='+encodeURIComponent(env):'');
   let data=await safeJson(await fetch(url)).catch(()=>null);
-  if(!data||!data.apis){document.getElementById('flow-diagram').innerHTML='<span style="color:var(--tx3)">Upload logs to render the architecture map.</span>';return;}
+  if(!data||!data.apis){setHTML('flow-diagram','<span style="color:var(--tx3)">Upload logs or save API Registry to render the architecture map.</span>');return;}
+  loadApiRegistry().catch(()=>{});
   _smData=data;
-  let apiSel=document.getElementById('sm-api-select'), prev=apiSel.value;
+  let apiSel=byId('sm-api-select'); if(!apiSel)return; let prev=apiSel.value;
   apiSel.innerHTML='<option value="">— Select API —</option>'+data.apis.map(a=>`<option value="${esc(a.api_name)}">${esc(a.api_name)} (${a.total_requests} reqs)</option>`).join('');
   if(prev) apiSel.value=prev;
-  document.getElementById('sm-api-overview').innerHTML=`<div class="table-wrap"><table><thead><tr><th>API</th><th>Envs</th><th>Requests</th><th>Errors</th><th>Error %</th></tr></thead><tbody>${data.apis.map(a=>`<tr onclick="document.getElementById('sm-api-select').value='${esc(a.api_name)}';onSmApiChange()" style="cursor:pointer"><td><b>${esc(a.api_name)}</b></td><td>${(a.environments||[]).join(', ')}</td><td>${a.total_requests}</td><td class="${a.total_errors?'pill-error':''}">${a.total_errors}</td><td>${a.error_rate}%</td></tr>`).join('')}</tbody></table></div>`;
+  setHTML('sm-api-overview',`<div class="table-wrap"><table><thead><tr><th>API</th><th>Owner</th><th>Envs</th><th>Requests</th><th>Errors</th><th>Error %</th></tr></thead><tbody>${data.apis.map(a=>`<tr onclick="document.getElementById('sm-api-select').value='${esc(a.api_name)}';onSmApiChange()" style="cursor:pointer"><td><b>${esc(a.api_name)}</b></td><td>${esc(a.owner||'Unassigned')}</td><td>${(a.environments||[]).join(', ')}</td><td>${a.total_requests}</td><td class="${a.total_errors?'pill-error':''}">${a.total_errors}</td><td>${a.error_rate}%</td></tr>`).join('')}</tbody></table></div>`);
   if(prev) onSmApiChange(); else if(data.apis.length){apiSel.value=data.apis[0].api_name;onSmApiChange();}
 }
 function onSmApiChange(){
   let apiName=document.getElementById('sm-api-select').value;
-  if(!apiName||!_smData){document.getElementById('sm-endpoint-select').innerHTML='<option value="">— select API first —</option>';return;}
+  if(!apiName||!_smData){setHTML('sm-endpoint-select','<option value="">— select API first —</option>');return;}
   let api=_smData.apis.find(a=>a.api_name===apiName); if(!api)return;
-  let epSel=document.getElementById('sm-endpoint-select');
+  let epSel=byId('sm-endpoint-select'); if(!epSel)return;
   epSel.innerHTML='<option value="">— All endpoints —</option>'+(api.endpoints||[]).map(e=>`<option value="${esc(e.endpoint||'/')}">${esc(e.method||'?')} ${esc(e.endpoint||'/')} (${e.request_count} reqs, ${e.error_count} errs)</option>`).join('');
-  document.getElementById('sm-endpoint-list').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Method</th><th>Endpoint</th><th>Reqs</th><th>Errors</th><th>Avg Lat</th><th>Env</th></tr></thead><tbody>${(api.endpoints||[]).map(e=>`<tr onclick="document.getElementById('sm-endpoint-select').value='${esc(e.endpoint||'/')}';onSmEndpointChange()" style="cursor:pointer"><td><span class="status-pill">${esc(e.method||'?')}</span></td><td class="mono">${esc(e.endpoint||'/')}</td><td>${e.request_count}</td><td class="${e.error_count?'pill-error':''}">${e.error_count}</td><td>${e.avg_latency_ms}ms</td><td>${esc(e.environment||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  setHTML('sm-endpoint-list',`<div class="table-wrap"><table><thead><tr><th>Method</th><th>Endpoint</th><th>Reqs</th><th>Errors</th><th>Avg Lat</th><th>Env</th></tr></thead><tbody>${(api.endpoints||[]).map(e=>`<tr onclick="document.getElementById('sm-endpoint-select').value='${esc(e.endpoint||'/')}';onSmEndpointChange()" style="cursor:pointer"><td><span class="status-pill">${esc(e.method||'?')}</span></td><td class="mono">${esc(e.endpoint||'/')}</td><td>${e.request_count}</td><td class="${e.error_count?'pill-error':''}">${e.error_count}</td><td>${e.avg_latency_ms}ms</td><td>${esc(e.environment||'')}</td></tr>`).join('')}</tbody></table></div>`);
   document.getElementById('sm-kpi-row').style.display='';document.getElementById('sm-kpi-reqs').textContent=api.total_requests;document.getElementById('sm-kpi-errs').textContent=api.total_errors;document.getElementById('sm-kpi-erate').textContent=api.error_rate+'%';document.getElementById('sm-kpi-lat').textContent='—';document.getElementById('sm-kpi-trace').textContent='—';
-  if(api.endpoints&&api.endpoints.length){_selectedEndpoint=api.endpoints[0];renderArchitecture(_selectedEndpoint);} else document.getElementById('flow-diagram').innerHTML='No endpoints detected for this API.';
+  if(api.endpoints&&api.endpoints.length){_selectedEndpoint=api.endpoints[0];renderArchitecture(_selectedEndpoint);} else setHTML('flow-diagram','No endpoints detected for this API. Add endpoints in API Registry.');
 }
 function onSmEndpointChange(){let apiName=document.getElementById('sm-api-select').value,epVal=document.getElementById('sm-endpoint-select').value;if(!apiName||!_smData)return;let api=_smData.apis.find(a=>a.api_name===apiName);if(!api)return;let ep=epVal?api.endpoints.find(e=>(e.endpoint||'/')==epVal):api.endpoints[0];if(ep){_selectedEndpoint=ep;renderArchitecture(ep);}}
 function renderArchitecture(ep){
@@ -259,12 +272,13 @@ function renderArchitecture(ep){
   const flow=(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]));
   const hints=(arch.hints||[]);
   safeSetHTML('flow-hints',(flow.length?'<b>Clean high-level flow</b><br>'+flow.map(x=>`<span class="flow-node">${esc(x)}</span>`).join('<span class="flow-arrow">→</span>')+'<br><br>':'')+(hints.length?hints.map(h=>'• '+esc(h)).join('<br>'):'• Start with Guided Debugging: inspect the top failed trace and compare the 10 preceding log lines.<br>• Group similar errors and assign ownership by app/dependency instead of reading raw logs line by line.'));
+  renderEndpointIntelligence(ep);
 }
 function renderArchitectureSvg(ep){
 
   let arch=ep.architecture||{},nodes=arch.nodes||[],edges=arch.edges||[];
   if(!nodes.length){
-    document.getElementById('flow-diagram').innerHTML=(ep.flow_steps||[]).map((s,i,a)=>`<span class="flow-node">${esc(s)}</span>${i<a.length-1?'<span class="flow-arrow">→</span>':''}`).join('')||'No topology detected for this endpoint.';
+    setHTML('flow-diagram',(ep.flow_steps||[]).map((s,i,a)=>`<span class="flow-node">${esc(s)}</span>${i<a.length-1?'<span class="flow-arrow">→</span>':''}`).join('')||'No topology detected for this endpoint.');
     return;
   }
   // Only use tiers that actually have nodes — avoid blank columns
@@ -342,13 +356,13 @@ function renderArchitectureSvg(ep){
     </g>`;
   }).join('');
 
-  document.getElementById('flow-diagram').innerHTML=`<svg class="arch-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet" style="height:${H}px">${defs}${dividers}${labels}${edgeSvg}${nodeSvg}</svg>`;
+  setHTML('flow-diagram',`<svg class="arch-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet" style="height:${H}px">${defs}${dividers}${labels}${edgeSvg}${nodeSvg}</svg>`);
   bindArchTooltips();
 }
 function renderTraceWaterfall(ep){
   // Inline panel: just show clickable summary cards
   let traces=(ep.architecture?.traces)||[];
-  let panel=document.getElementById('arch-waterfall');
+  let panel=byId('arch-waterfall'); if(!panel)return;
   if(!traces.length){panel.innerHTML='<div style="color:var(--tx3);padding:20px">No trace waterfall detected for this endpoint.</div>';return;}
   panel.innerHTML=traces.map((t,idx)=>`
     <div class="trace-card" onclick="openWaterfallModal(${idx})" title="Click to open full waterfall">
@@ -450,7 +464,7 @@ function showSection(name,ev){
   document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
   if(ev?.currentTarget) ev.currentTarget.classList.add('active');
   if(name==='history')   loadHistory();
-  if(name==='flow')      {renderFlow();loadSystemMap();}
+  if(name==='flow')      {renderFlow();loadSystemMap();setTimeout(()=>loadApiRegistry().catch(()=>{}),250);}
   if(name==='compliance')loadCompliance();
   if(name==='connectors')loadConnectors();
   if(name==='api')       loadApiDocs();
@@ -562,6 +576,58 @@ async function updateIncident(id,status){await safeJson(await fetch('/incidents/
 async function loadLogMetrics(){try{let d=await safeJson(await fetch('/log-metrics'));safeSetHTML('metrics-content',`<div class="lite-grid"><div class="kpi"><b>${d.errors||0}</b><span>Errors</span></div><div class="kpi"><b>${d.success||0}</b><span>Success</span></div><div class="kpi"><b>${d.ingested_lines||0}</b><span>Ingested Lines</span></div><div class="kpi"><b>${esc(d.anomaly?.status||'Normal')}</b><span>Anomaly</span></div></div><div class="two"><div class="card"><h3>Metrics Summary</h3>${(d.metrics||[]).map(m=>`<div class="node-card"><b>${esc(m.name)}</b><div style="color:var(--tx2)">${esc(m.value)}</div></div>`).join('')||'<p style="color:var(--tx3)">No metrics yet.</p>'}</div><div class="card"><h3>Anomaly Summary</h3><div class="node-card"><b>${esc(d.anomaly?.status||'Normal')}</b><div style="color:var(--tx2)">${esc(d.anomaly?.reason||'Not enough history yet. Baseline will improve as logs are ingested.')}</div></div></div></div>`)}catch(e){console.warn(e)}}
 async function loadMarketplace(){let rows=await safeJson(await fetch('/marketplace'));document.getElementById('marketplace-grid').innerHTML=(rows||[]).map(m=>`<div class="market-card"><div class="icon">${esc(m.icon)}</div><h3>${esc(m.name)}</h3><p style="color:var(--tx2)">${esc(m.description)}</p><button class="btn btn-ghost btn-sm" onclick="showSection('connectors',event)">${m.status==='available'?'Configure':'Coming soon'}</button></div>`).join('')}
 async function loadBilling(){let d=await safeJson(await fetch('/billing/usage'));document.getElementById('bill-plan').textContent=d.plan;document.getElementById('bill-storage').textContent=d.storage_mb+' MB';document.getElementById('bill-ingestion').textContent=d.ingestion_gb_month+' GB';document.getElementById('bill-users').textContent=d.users;document.getElementById('bill-retention').textContent=d.retention_days+' days';document.getElementById('bill-alerts').textContent=d.alerts;document.getElementById('billing-limits').innerHTML=`<div class="node-card"><b>${esc(d.plan)} plan</b><div style="color:var(--tx2)">${d.limits.storage_gb} GB storage · ${d.limits.ingestion_gb_month} GB/month ingestion · ${d.limits.users} users · ${d.limits.retention_days} days retention · ${d.limits.alerts} alerts</div></div>`}
+
+// V24 helpers and advanced reliability/system-map features
+function byId(id){return document.getElementById(id)}
+function setHTML(id,html){const el=byId(id); if(el){el.innerHTML=html;} else {console.warn('Missing element '+id);} }
+function setText(id,text){const el=byId(id); if(el){el.textContent=text;} else {console.warn('Missing element '+id);} }
+function renderEndpointIntelligence(ep){
+  const req=Number(ep.request_count||0), err=Number(ep.error_count||0), lat=Number(ep.avg_latency_ms||0);
+  const traces=(ep.architecture&&ep.architecture.traces)||[];
+  const api=((_smData&&_smData.apis)||[]).find(a=>a.api_name===(byId('sm-api-select')||{}).value)||{};
+  const hasManual=(ep.flow_steps||[]).length>2 || ((ep.architecture&&ep.architecture.simple_flow)||[]).length>2 || ((api.downstream_systems||[]).length>0);
+  const conf=traces.length&&req?'High Confidence':hasManual?'Medium Confidence':'Needs Manual Mapping';
+  const confClass=conf==='High Confidence'?'pill-ok':conf==='Medium Confidence'?'pill-warn':'pill-error';
+  setHTML('flow-confidence',`<b class="${confClass}">${conf}</b><div style="color:var(--tx2);font-size:12px;margin-top:6px">Signals: ${traces.length} trace sample(s), ${req} request(s), ${hasManual?'manual registry available':'manual registry missing'}</div>`);
+  const owner=api.owner||'Unassigned';
+  setHTML('error-ownership',`<b>${esc(owner)}</b><div style="color:var(--tx2);font-size:12px;margin-top:6px">${err?err+' error(s) should be triaged by API owner first, then downstream owner if dependency step fails.':'No active error owner required.'}</div>`);
+  const rate=Math.round(err/Math.max(1,req)*1000)/10; const sla=rate>5||lat>3000?'Breach risk':rate>1||lat>1000?'Watch':'Healthy';
+  setHTML('endpoint-sla',`<b class="${sla==='Healthy'?'pill-ok':sla==='Watch'?'pill-warn':'pill-error'}">${sla}</b><div style="color:var(--tx2);font-size:12px;margin-top:6px">${rate}% errors · avg ${lat}ms · threshold suggestion: P95 &lt; 3s, error rate &lt; 1%</div>`);
+  const failed=traces.find(t=>Number(t.errors||0)>0), success=traces.find(t=>!Number(t.errors||0));
+  setHTML('trace-comparison',failed||success?`<div class="node-card"><b>Failed:</b> <code class="mono">${esc((failed||{}).trace||'Not found')}</code><br><b>Success:</b> <code class="mono">${esc((success||{}).trace||'Not found')}</code><div style="color:var(--tx2);font-size:12px;margin-top:6px">Compare failed trace hops against a successful trace for the same endpoint to isolate the first diverging service.</div></div>`:'No traces available yet. Upload logs with trace/correlation IDs.');
+  setHTML('smart-rca',`<ol style="color:var(--tx2);line-height:1.9;margin-left:18px"><li>Open top failed trace waterfall.</li><li>Check 10 log lines before first ERROR.</li><li>Assign owner: ${esc(owner)}.</li><li>${lat>3000?'Investigate slow downstream latency.':err?'Group same error message across traces.':'No major hotspot detected.'}</li></ol>`);
+}
+async function loadApiRegistry(){
+  const env=(byId('sm-env-filter')||{}).value||'';
+  const data=await safeJson(await fetch('/api/v1/api-registry'+(env?'?env='+encodeURIComponent(env):''))).catch(()=>({apis:[]}));
+  const rows=(data.apis||[]); window._apiRegistryRows=rows;
+  setHTML('api-registry-list','<table><thead><tr><th>API</th><th>Env</th><th>Owner</th><th>Base URL</th><th>Downstream</th><th>Endpoints</th><th>Action</th></tr></thead><tbody>'+ (rows.map(r=>`<tr><td><b>${esc(r.api_name)}</b></td><td>${esc(r.environment)}</td><td>${esc(r.owner||'Unassigned')}</td><td class="mono">${esc(r.base_url||'—')}</td><td>${(r.downstream_systems||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join(' ')||'—'}</td><td>${(r.endpoints||[]).length}</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm(${r.id})">Edit</button></td></tr>`).join('') || '<tr><td colspan="7">No registry found. Add one above.</td></tr>') + '</tbody></table>');
+}
+function fillRegistryForm(id){
+  const r=(window._apiRegistryRows||[]).find(x=>x.id===id); if(!r)return;
+  byId('reg-api-name').value=r.api_name||''; byId('reg-env').value=r.environment||'PROD'; byId('reg-base-url').value=r.base_url||''; byId('reg-owner').value=r.owner||'';
+  byId('reg-downstreams').value=(r.downstream_systems||[]).join(', ');
+  byId('reg-endpoints').value=(r.endpoints||[]).map(e=>`${e.method||''} ${e.endpoint||'/'}`.trim()).join('\n');
+}
+async function saveApiRegistry(){
+  const api=(byId('reg-api-name')||{}).value?.trim(); if(!api){alert('API name is required');return;}
+  const endpoints=((byId('reg-endpoints')||{}).value||'').split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const m=line.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$/i);return m?{method:m[1].toUpperCase(),endpoint:m[2].trim()}:{endpoint:line};});
+  const body={api_name:api,environment:(byId('reg-env')||{}).value||'PROD',base_url:(byId('reg-base-url')||{}).value||'',owner:(byId('reg-owner')||{}).value||'',downstream_systems:(byId('reg-downstreams')||{}).value||'',endpoints};
+  const res=await safeJson(await fetch('/api/v1/api-registry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+  if(res.error){alert(res.error);return;} await loadApiRegistry(); await loadSystemMap(); alert('API Registry saved');
+}
+function renderUploadQuality(){
+  const total=_allRows.length, traces=new Set(_allRows.map(r=>r.trace).filter(Boolean)).size, apis=new Set(_allRows.map(r=>r.app).filter(Boolean)).size;
+  const unknown=_allRows.filter(r=>!r.app||r.app==='unknown'||!r.level).length; const conf=total?Math.max(5,Math.round(((total-unknown)/total)*100)):0;
+  setHTML('upload-quality',`<div class="lite-grid" style="grid-template-columns:repeat(4,1fr)"><div class="kpi"><b>${apis}</b><span>APIs detected</span></div><div class="kpi"><b>${traces}</b><span>Trace IDs</span></div><div class="kpi"><b>${unknown}</b><span>Unknown lines</span></div><div class="kpi"><b>${conf}%</b><span>Parsing confidence</span></div></div>`);
+}
+// V24 stable loaders: override older duplicate functions and never write into missing IDs.
+async function loadOnboarding(){try{let d=await safeJson(await fetch('/onboarding/status')).catch(()=>({steps:[]}));setHTML('onboarding-content','<ol style="color:var(--tx2);line-height:2;margin-left:18px"><li>Register APIs in System Map → API Registry.</li><li>Upload logs by environment.</li><li>Check Upload Quality, Trace Explorer and System Map.</li><li>Create incidents or widgets for repeating issues.</li></ol>'+((d.steps||[]).map((s,i)=>`<div class="debug-step" data-step="${i+1}"><b>${esc(s.name)}</b> <span class="badge ${s.done?'badge-ok':'badge-warn'}">${s.done?'DONE':'PENDING'}</span></div>`).join('')));renderUploadQuality();}catch(e){console.warn(e)}}
+async function loadSourceHealth(){try{let h=await safeJson(await fetch('/data-source-health')).catch(()=>({}));let cards=Object.entries(h).filter(([k])=>k!=='connectors').map(([k,v])=>`<div class="action-card ${v.status==='active'||v.status==='ready'?'ok':v.status==='not_connected'?'warn':'critical'}"><small>${esc(k.replaceAll('_',' '))}</small><b>${esc(v.status||'unknown')}</b><small>${esc(v.last_seen||v.endpoint||'')}</small></div>`).join('');let jobs=await safeJson(await fetch('/ingestion/jobs')).catch(()=>[]);let jobTable='<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>ID</th><th>Source</th><th>File</th><th>Status</th><th>Bytes</th><th>Lines</th><th>Finished</th></tr></thead><tbody>'+((jobs||[]).map(j=>`<tr><td>${j.id}</td><td>${esc(j.source)}</td><td>${esc(j.file)}</td><td>${esc(j.status)}</td><td>${j.bytes}</td><td>${j.lines}</td><td>${esc(j.finished_at||'')}</td></tr>`).join('')||'<tr><td colspan="7">No jobs yet.</td></tr>')+'</tbody></table></div>';setHTML('source-health-content','<div class="actions-grid">'+(cards||'<div class="node-card">No connector health yet.</div>')+'</div>'+jobTable)}catch(e){console.warn(e)}}
+async function loadPerformance(){try{let d=await safeJson(await fetch('/performance')).catch(()=>({metrics:[]}));setHTML('performance-content','<div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Duration</th><th>Rows</th><th>Bytes</th></tr></thead><tbody>'+((d.metrics||[]).map(m=>`<tr><td>${esc(m.at)}</td><td>${esc(m.action)}</td><td>${m.duration_ms}ms</td><td>${m.rows}</td><td>${m.bytes}</td></tr>`).join('')||'<tr><td colspan="5">No performance metrics yet.</td></tr>')+'</tbody></table></div>')}catch(e){console.warn(e)}}
+async function loadWidgets(){try{let rows=await safeJson(await fetch('/dashboard-widgets')).catch(()=>[]);setHTML('widgets-content',(rows||[]).map(w=>`<div class="widget-card"><small>${esc(w.type)}</small><h3>${esc(w.title)}</h3><b>${esc(w.value||'—')}</b><div style="margin-top:10px"><button class="btn btn-ghost btn-sm" onclick="deleteWidget(${w.id})">Remove</button></div></div>`).join('')||'<div class="node-card">No widgets yet. Add your first dashboard widget.</div>')}catch(e){console.warn(e)}}
+async function loadIncidents(){try{let rows=await safeJson(await fetch('/incidents')).catch(()=>[]);setHTML('incidents-content','<div class="table-wrap"><table><thead><tr><th>ID</th><th>Title</th><th>Severity</th><th>API</th><th>Owner</th><th>Status</th><th>Action</th></tr></thead><tbody>'+((rows||[]).map(i=>`<tr><td>${i.id}</td><td>${esc(i.title)}</td><td>${esc(i.severity||'Medium')}</td><td>${esc(i.impacted_apis||'')}</td><td>${esc(i.owner||'Unassigned')}</td><td><span class="status-pill ${i.status==='Resolved'?'status-resolved':i.status==='Acknowledged'?'status-ack':'status-open'}">${esc(i.status||'Open')}</span></td><td><button class="btn btn-ghost btn-sm" onclick="updateIncident(${i.id},'Acknowledged')">Ack</button><button class="btn btn-ghost btn-sm" onclick="updateIncident(${i.id},'Resolved')">Resolve</button></td></tr>`).join('')||'<tr><td colspan="7">No incidents yet.</td></tr>')+'</tbody></table></div>')}catch(e){console.warn(e)}}
+async function loadLogMetrics(){try{let d=await safeJson(await fetch('/log-metrics')).catch(()=>({}));setHTML('metrics-content',`<div class="lite-grid"><div class="kpi"><b>${d.errors||0}</b><span>Errors</span></div><div class="kpi"><b>${d.warnings||0}</b><span>Warnings</span></div><div class="kpi"><b>${d.success||0}</b><span>Success</span></div><div class="kpi"><b>${d.ingested_lines||0}</b><span>Ingested Lines</span></div><div class="kpi"><b>${esc((d.anomaly||{}).status||'Normal')}</b><span>Anomaly</span></div></div><div class="two" style="margin-top:14px"><div class="card"><h3>Metrics Summary</h3>${(d.metrics||[]).map(m=>`<div class="node-card"><b>${esc(m.name)}</b><div style="color:var(--tx2)">${esc(m.value)}</div></div>`).join('')||'<p style="color:var(--tx3)">No metrics yet.</p>'}</div><div class="card"><h3>Anomaly Summary</h3><div class="node-card"><b>${esc((d.anomaly||{}).status||'Normal')}</b><div style="color:var(--tx2)">${esc((d.anomaly||{}).reason||'Not enough history yet. Baseline will improve as logs are ingested.')}</div></div></div></div>`)}catch(e){console.warn(e)}}
 
 setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
 </script>
