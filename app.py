@@ -240,6 +240,7 @@ class ApiRegistry(db.Model):
     base_url     = db.Column(db.String(400), default="")
     owner        = db.Column(db.String(120), default="")
     status       = db.Column(db.String(40), default="active")
+    downstream_systems_json = db.Column(db.Text, default="[]")
     last_seen_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     __table_args__ = (db.UniqueConstraint("user_id", "api_name", "environment", name="uq_api_registry_user_api_env"),)
@@ -567,6 +568,7 @@ def ensure_runtime_columns():
             "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS log_rows_json TEXT DEFAULT '[]'",
             "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS result_json TEXT DEFAULT '{}'",
             "ALTER TABLE api_flow_map ADD COLUMN IF NOT EXISTS architecture_json TEXT DEFAULT '{}'",
+            "ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS downstream_systems_json TEXT DEFAULT '[]'",
         ]
     else:
         existing_user = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
@@ -582,6 +584,11 @@ def ensure_runtime_columns():
         try:
             existing_afm = {row[1] for row in db.session.execute(text("PRAGMA table_info(api_flow_map)")).fetchall()}
             if "architecture_json" not in existing_afm: stmts.append("ALTER TABLE api_flow_map ADD COLUMN architecture_json TEXT DEFAULT '{}'")
+        except Exception:
+            pass
+        try:
+            existing_ar = {row[1] for row in db.session.execute(text("PRAGMA table_info(api_registry)")).fetchall()}
+            if "downstream_systems_json" not in existing_ar: stmts.append("ALTER TABLE api_registry ADD COLUMN downstream_systems_json TEXT DEFAULT '[]'")
         except Exception:
             pass
     for stmt in stmts:
@@ -1564,6 +1571,17 @@ def persist_observability_indexes(user_id, session_id, rows, raw, env, filename,
             reg = ApiRegistry(user_id=user_id, api_name=api_name, environment=env, status="active")
             db.session.add(reg); db.session.flush()
         reg.last_seen_at = now
+        try:
+            downstream = set(_json_loads_safe(reg.downstream_systems_json, []))
+            for fm in flow_maps or []:
+                if fm.api_name == api_name:
+                    arch = _json_loads_safe(fm.architecture_json, {})
+                    for n in arch.get("nodes", []):
+                        if n.get("tier") in ("External", "Data", "Service") and n.get("name") != api_name:
+                            downstream.add(str(n.get("name"))[:160])
+            reg.downstream_systems_json = json.dumps(sorted(x for x in downstream if x))
+        except Exception:
+            pass
         avg_lat = round(sum(stat["latencies"]) / len(stat["latencies"])) if stat["latencies"] else 0
         ep = ApiEndpoint.query.filter_by(user_id=user_id, api_name=api_name, environment=env, endpoint=endpoint, method=method).first()
         if not ep:
@@ -2550,10 +2568,57 @@ def api_system_map():
             except Exception:
                 pass
 
+    # Merge manually maintained API Registry so System Map works even before fresh log uploads.
+    rq = ApiRegistry.query.filter_by(user_id=user.id)
+    if env_filter:
+        rq = rq.filter(ApiRegistry.environment.ilike(env_filter))
+    if api_filter:
+        rq = rq.filter(ApiRegistry.api_name.ilike(f"%{api_filter}%"))
+    for reg in rq.order_by(ApiRegistry.last_seen_at.desc()).all():
+        data = api_map.setdefault(reg.api_name, {
+            "api_name": reg.api_name,
+            "environments": set(),
+            "total_requests": 0,
+            "total_errors": 0,
+            "endpoints": {},
+            "base_url": reg.base_url,
+            "owner": reg.owner,
+            "status": reg.status,
+            "downstream_systems": _json_loads_safe(reg.downstream_systems_json, []),
+        })
+        data["base_url"] = reg.base_url or data.get("base_url", "")
+        data["owner"] = reg.owner or data.get("owner", "")
+        data["status"] = reg.status or data.get("status", "active")
+        data["downstream_systems"] = sorted(set(data.get("downstream_systems", []) + _json_loads_safe(reg.downstream_systems_json, [])))
+        data["environments"].add(reg.environment or "PROD")
+        registry_eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).all()
+        if not data.get("total_requests"):
+            data["total_requests"] = sum(int(e.request_count or 0) for e in registry_eps)
+            data["total_errors"] = sum(int(e.error_count or 0) for e in registry_eps)
+        for ep in registry_eps:
+            ep_key = ep.endpoint or "/"
+            if ep_key not in data["endpoints"]:
+                data["endpoints"][ep_key] = {
+                    "endpoint": ep_key,
+                    "method": ep.method,
+                    "flow_steps": [reg.api_name] + _json_loads_safe(reg.downstream_systems_json, []) + ["Response"],
+                    "architecture": {"simple_flow": [reg.api_name] + _json_loads_safe(reg.downstream_systems_json, []) + ["Response"], "hints": ["Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency."]},
+                    "request_count": ep.request_count or 0,
+                    "error_count": ep.error_count or 0,
+                    "avg_latency_ms": ep.avg_latency_ms or 0,
+                    "sample_trace": "",
+                    "environment": ep.environment,
+                    "session_id": None,
+                }
+
     result = []
     for api_name, data in api_map.items():
         result.append({
             "api_name":       api_name,
+            "base_url":       data.get("base_url", ""),
+            "owner":          data.get("owner", ""),
+            "status":         data.get("status", "active"),
+            "downstream_systems": data.get("downstream_systems", []),
             "environments":   sorted(data["environments"]),
             "total_requests": data["total_requests"],
             "total_errors":   data["total_errors"],
@@ -2583,6 +2648,11 @@ def api_registry_inventory():
         reg.base_url = str(data.get("base_url") or reg.base_url or "")[:400]
         reg.owner = str(data.get("owner") or reg.owner or "")[:120]
         reg.status = str(data.get("status") or reg.status or "active")[:40]
+        downstream = data.get("downstream_systems") or data.get("dependencies") or []
+        if isinstance(downstream, str):
+            downstream = [x.strip() for x in re.split(r"[,\n]", downstream) if x.strip()]
+        if downstream:
+            reg.downstream_systems_json = json.dumps([str(x)[:160] for x in downstream if str(x).strip()])
         reg.last_seen_at = datetime.datetime.utcnow()
         endpoints = data.get("endpoints") or []
         db.session.flush()
@@ -2608,7 +2678,7 @@ def api_registry_inventory():
     output = []
     for r in records:
         eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=r.api_name, environment=r.environment).order_by(ApiEndpoint.request_count.desc()).all()
-        output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
+        output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "downstream_systems": _json_loads_safe(r.downstream_systems_json, []), "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
     return jsonify({"apis": output, "total": len(output)})
 
 
