@@ -681,8 +681,18 @@ async function loadApiRegistry(){
   const env=(byId('sm-env-filter')||{}).value||'';
   const data=await safeJson(await fetch('/api/v1/api-registry'+(env?'?env='+encodeURIComponent(env):''))).catch(()=>({apis:[]}));
   const rows=(data.apis||[]); window._apiRegistryRows=rows;
-  setHTML('api-registry-list','<table><thead><tr><th>API</th><th>Env</th><th>Owner</th><th>Base URL</th><th>Downstream</th><th>Endpoints</th><th>Action</th></tr></thead><tbody>'+ (rows.map(r=>`<tr><td><b>${esc(r.api_name)}</b></td><td>${esc(r.environment)}</td><td>${esc(r.owner||'Unassigned')}</td><td class="mono">${esc(r.base_url||'—')}</td><td>${(r.downstream_systems||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join(' ')||'—'}</td><td>${(r.endpoints||[]).length}</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm(${r.id})">Edit</button></td></tr>`).join('') || '<tr><td colspan="7">No registry found. Add one above.</td></tr>') + '</tbody></table>');
+  setHTML('api-registry-list','<table><thead><tr><th>API</th><th>Env</th><th>Owner</th><th>Health</th><th>Downstream</th><th>Endpoints</th><th>Action</th></tr></thead><tbody>'+ (rows.map(r=>{const errs=(r.endpoints||[]).reduce((a,e)=>a+Number(e.error_count||0),0), reqs=(r.endpoints||[]).reduce((a,e)=>a+Number(e.request_count||0),0); const health=errs?'WARN':'OK'; return `<tr><td><b>${esc(r.api_name)}</b><br><small>${reqs} reqs · ${errs} errors</small></td><td>${esc(r.environment)}</td><td>${esc(r.owner||'Unassigned')}</td><td><span class="badge ${errs?'badge-warn':'badge-ok'}">${health}</span></td><td>${(r.downstream_systems||[]).slice(0,4).map(x=>`<span class="chip">${esc(x)}</span>`).join(' ')||'—'}${(r.downstream_systems||[]).length>4?` <span class="chip">+${(r.downstream_systems||[]).length-4} more</span>`:''}</td><td>${(r.endpoints||[]).length}</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm(${r.id})">Edit</button> <button class="btn btn-ghost btn-sm danger" onclick="deleteApiRegistry(${r.id},'${esc(r.api_name)}')">Delete</button></td></tr>`}).join('') || '<tr><td colspan="7">No registry found. Add one above.</td></tr>') + '</tbody></table>');
 }
+
+async function deleteApiRegistry(id,name){
+  if(!confirm('Delete API Registry entry: '+name+'? This removes registry/endpoints/flow map for this API, not uploaded log files.')) return;
+  try{
+    const res=await safeJson(await fetch('/api/v1/api-registry',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}));
+    if(res.error){alert(res.error);return;}
+    await loadApiRegistry(); await loadSystemMap();
+  }catch(e){alert('Unable to delete API Registry entry: '+e.message);}
+}
+
 function fillRegistryForm(id){
   const r=(window._apiRegistryRows||[]).find(x=>x.id===id); if(!r)return;
   byId('reg-api-name').value=r.api_name||''; byId('reg-env').value=r.environment||'PROD'; byId('reg-base-url').value=r.base_url||''; byId('reg-owner').value=r.owner||'';

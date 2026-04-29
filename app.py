@@ -1059,10 +1059,15 @@ def build_log_rows(records, env, filename="", user_id=None):
                     lat = ""
         flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
         flow = _clean_service_name(flow) if flow else ""
+        route_api, route_method, route_endpoint = _extract_mule_route_from_text(line) if '_extract_mule_route_from_text' in globals() else ('','','')
+        if route_api and (app == 'unknown' or not app):
+            app = route_api
+            current_app = app
         rows.append({
             "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
-            "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
+            "event": trace, "flow": flow, "method": route_method, "endpoint": route_endpoint or "",
+            "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
             "message": mask_secrets(line, user_id), "search_tokens": extract_safe_search_tokens(line), "is_multiline": "\n" in line
         })
     return rows
@@ -2059,6 +2064,163 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
         "simple_flow": ["Client", api_name or "Application", "Response"]
     }
 
+
+# ── V38 Mule flow teaching + registry delete fixes ───────────────────────────
+def _extract_mule_route_from_text(text: str):
+    msg = str(text or '')
+    m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):\\([^:\s\]]+)', msg, re.I)
+    if not m:
+        m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):/([^:\s\]]+)', msg, re.I)
+    if not m:
+        return '', '', ''
+    api = _clean_service_name(m.group(1))
+    method = m.group(2).upper()
+    path = m.group(3)
+    path = re.split(r':(?:application|text|multipart|json|xml)', path, maxsplit=1)[0]
+    path = path.replace('\\\\', '/').replace('\\', '/').replace('//', '/').strip('/')
+    endpoint = '/' + path if path else '/'
+    endpoint = _normalise_endpoint(endpoint) or '/'
+    return api, method, endpoint
+
+def _infer_business_label(text: str, processor: str = '', endpoint: str = ''):
+    msg = str(text or '').lower(); proc = str(processor or '').lower(); ep = str(endpoint or '').lower()
+    if 'loan\\receipt' in msg or '/loan/receipt' in ep or 'loan-receipt' in proc: return 'Loan Receipt'
+    if 'paymentengine\\loandetails' in msg or '/paymentengine/loandetails' in ep or 'loan-details' in proc: return 'Loan Details'
+    if 'generate-otp' in msg or 'generate-otp' in proc or '/generate-otp' in ep: return 'Generate OTP'
+    if 'verify-otp' in msg or 'verify-otp' in proc or '/verify-otp' in ep: return 'Verify OTP'
+    if 'htmltopdf' in msg or 'html-to-pdf' in proc or 'htmltopdf' in ep: return 'HTML to PDF'
+    if 'crif' in msg and 'sms' in msg: return 'CRIF SMS'
+    if 'emandate' in msg or 'mandate' in proc: return 'Kotak eMandate'
+    return ''
+
+def _processor_stage_name(processor: str, message: str = '', endpoint: str = ''):
+    proc = _clean_service_name(_normalise_mule_component_name(processor or '')); low = proc.lower()
+    if not proc: return _infer_business_label(message, processor, endpoint) or ''
+    if 'entry-logger' in low: return 'Request Entry'
+    if 'exit-logger' in low: return 'Response Exit'
+    if 'token' in low or 'jwt' in low: return 'Token / Auth'
+    if 'google' in low and 'secops' in low: return 'Security Logging'
+    if 'loan-details' in low: return 'Loan Details'
+    if 'loan-receipt' in low or 'receipt' in low: return 'Loan Receipt'
+    if 'generate-otp' in low: return 'Generate OTP'
+    if 'verify-otp' in low: return 'Verify OTP'
+    if 'html-to-pdf' in low or 'htmltopdf' in low: return 'HTML to PDF'
+    if 'make-api-call' in low:
+        biz = _infer_business_label(message, processor, endpoint)
+        return (biz + ' Downstream Call') if biz else 'Downstream Call'
+    if 'sub-flow' in low or 'subflow' in low:
+        return _infer_business_label(message, processor, endpoint) or proc
+    return proc
+
+def _extract_downstream_name(message: str, processor: str = '', endpoint: str = ''):
+    msg = str(message or ''); low = msg.lower()
+    for pat in [r'(?:before|after)\s+request\s+to\s+([A-Za-z][A-Za-z0-9_.-]{2,80})', r'(?:calling|invoking|request to)\s+([A-Za-z][A-Za-z0-9_.-]{2,80})', r'"(?:target|service|downstream|dependency|system)"\s*:\s*"([^"]+)"', r'https?://([^/\s"\']+)']:
+        m = re.search(pat, msg, re.I)
+        if m:
+            d = _clean_service_name(m.group(1))
+            if d and d.lower() not in {'before','after','request','success','error','log'}: return d
+    if 'salesforce' in low or 'sfdc' in low: return 'Salesforce'
+    if 'gupshup' in low or 'otp' in low: return 'Gupshup'
+    if 'paymentengine' in low: return 'Payment Engine'
+    if 'loan details' in low or 'loan receipt' in low or 'lms' in low: return 'LMS Core'
+    if 'kotak' in low or 'emandate' in low or 'nach' in low: return 'Kotak NACH'
+    if 'htmltopdf' in low: return 'HTML/PDF Engine'
+    return 'External System'
+
+def _clean_flow_sequence(seq):
+    out=[]; skip={'common','default','logging','logger','mule-subflow','external-service','service','flow','processor','subflow','mule-api'}
+    for item in seq or []:
+        x=_clean_service_name(item)
+        if not x or x.lower() in skip or _looks_like_processor_event_name(x): continue
+        if not any(y.lower()==x.lower() for y in out): out.append(x)
+    if 'Downstream Call' in out and any(x.endswith(' Downstream Call') for x in out):
+        out=[x for x in out if x!='Downstream Call']
+    return out[:12]
+
+def _extract_flow_steps_from_mule_rows(api_name: str, rows: list, endpoint: str = ''):
+    api = _clean_service_name(api_name) or 'Application'
+    steps=[api]; processors=[]; route_method=''; route_endpoint=endpoint or ''; 
+    for r in rows or []:
+        msg=str(r.get('message') or '')
+        a,m,ep=_extract_mule_route_from_text(msg)
+        if a and (not api or api=='Application'): api=a; steps[0]=api
+        if m: route_method = route_method or m
+        if ep and ep != '/': route_endpoint = route_endpoint or ep
+        pm=re.search(r'\[processor:\s*([^;\]]+)', msg, re.I)
+        proc=pm.group(1) if pm else (r.get('flow') or '')
+        if proc: processors.append((proc,msg,route_endpoint))
+    business=''
+    for proc,msg,ep in processors[:100]:
+        business = business or _infer_business_label(msg, proc, route_endpoint)
+    if route_method and route_endpoint and route_endpoint != '/': steps.append(f'{route_method} {route_endpoint}')
+    elif business: steps.append(business)
+    for proc,msg,ep in processors[:200]:
+        st=_processor_stage_name(proc,msg,route_endpoint)
+        if st: steps.append(st)
+        if re.search(r'\b(before|after)\s+(?:loan details|request|encrypt|api)|success|error|completed|Token Generated', msg, re.I):
+            if 'Downstream Call' in st or 'before request' in msg.lower() or 'after loan details' in msg.lower() or 'salesforce' in msg.lower() or 'otp success' in msg.lower() or 'verify otp' in msg.lower():
+                steps.append(_extract_downstream_name(msg, proc, route_endpoint))
+    if not any(str(x).lower().startswith('response') for x in steps): steps.append('Response')
+    return _clean_flow_sequence(steps), route_method, route_endpoint or '/'
+
+def _mule_row_parts(row):
+    msg = row.get("message", "") or ""; api = row.get("app") or "unknown-api"; method = ""; endpoint = row.get("endpoint") or ""
+    a,m,ep = _extract_mule_route_from_text(msg)
+    if a: api=a
+    if m: method=m
+    if ep and ep != '/': endpoint=ep
+    flow = row.get("flow") or ""
+    fm = re.search(r"\[processor:\s*([^;\]]+)", msg, re.I)
+    if fm: flow = _processor_stage_name(fm.group(1), msg, endpoint)
+    sm = re.search(r"processors/(\d+)", msg, re.I); step = int(sm.group(1)) if sm else 0
+    stage = "After Response" if re.search(r"\b(after|success|completed|exited)\b", msg, re.I) else "Before Request" if re.search(r"\b(before|entered|started)\b", msg, re.I) else "Processing"
+    return api, method, endpoint, flow, step, stage
+
+def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) -> list:
+    flow, _, _ = _extract_flow_steps_from_mule_rows(api_name, rows or [], '')
+    if len(flow) >= 2: return flow
+    api = _clean_service_name(api_name) or 'Application'; steps=[api]
+    if arch:
+        for item in arch.get('simple_flow', []) or []: steps.append(item)
+        for n in arch.get('nodes', []) or []: steps.append(n.get('name') if isinstance(n, dict) else n)
+    if not any(str(x).lower().startswith('response') for x in steps): steps.append('Response')
+    return _clean_flow_sequence(steps) or [api, 'Response']
+
+def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = '', endpoint: str = '') -> dict:
+    mule_rows = [r for r in (rows or []) if "MuleRuntime" in (r.get("message","") or "") or "processor:" in (r.get("message","") or "")]
+    if mule_rows:
+        flow, method, ep = _extract_flow_steps_from_mule_rows(api_name, mule_rows, endpoint)
+        req_count=len(mule_rows); err_count=sum(1 for r in mule_rows if str(r.get("level","")).upper() in ("ERROR","FAILURE"))
+        lats=[int(r.get("latency") or 0) for r in mule_rows if str(r.get("latency") or "").isdigit() and int(r.get("latency") or 0)>0]
+        avg_lat=round(sum(lats)/len(lats)) if lats else 0
+        nodes=[]; edges=[]
+        for i,name in enumerate(flow):
+            tier=_service_tier(name)
+            if i==0: tier="API"
+            if str(name).lower().startswith(('get ','post ','put ','delete ','patch ')): tier="Gateway"
+            if name=="Response": tier="Client"
+            error_here=err_count if (i==len(flow)-2 and err_count) else 0
+            nodes.append({"id":name,"name":name,"tier":tier,"count":req_count if i in (0,1) else 1,"errors":error_here,"warns":0,"avg_latency_ms":avg_lat if error_here else 0,"health":"critical" if error_here else "ok"})
+        for a,b in zip(flow, flow[1:]):
+            eerr=err_count if b==flow[-2] else 0
+            edges.append({"from":a,"to":b,"count":req_count or 1,"errors":eerr,"avg_latency_ms":avg_lat if eerr else 0,"label":"calls","error_rate":round(eerr/max(1,req_count)*100,1)})
+        trace_map={}
+        for r in mule_rows[:2000]:
+            trace=r.get("trace") or r.get("event") or ""
+            if not trace: continue
+            api,m,e,proc_flow,step,stage=_mule_row_parts(r)
+            service=proc_flow or _infer_business_label(r.get("message",""),'',ep) or api_name or api
+            tr=trace_map.setdefault(trace,{"trace":trace,"api":api_name or api,"endpoint":ep or endpoint or e or "/","rows":[],"errors":0,"latency":0})
+            tr["rows"].append({"time":r.get("time",""),"service":service,"stage":stage,"level":r.get("level",""),"message":(r.get("message","") or "")[:260],"latency":int(r.get("latency") or 0)})
+            tr["errors"] += 1 if str(r.get("level","")).upper() in ("ERROR","FAILURE") else 0
+            tr["latency"] = max(tr["latency"], int(r.get("latency") or 0))
+        traces=sorted(trace_map.values(), key=lambda t:(-t["errors"], -len(t["rows"])))[:12]
+        if not traces: traces,_ = _synthetic_trace_and_matrix(flow, req_count, err_count, avg_lat)
+        matrix=[{"from":e["from"],"to":e["to"],"calls":e["count"],"errors":e["errors"],"avg_latency_ms":e["avg_latency_ms"],"error_rate":e["error_rate"]} for e in edges]
+        tiers=sorted(set(n["tier"] for n in nodes), key=lambda t: {"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}.get(t,9))
+        return {"nodes":nodes,"edges":edges,"traces":traces,"matrix":matrix,"tiers":tiers,"simple_flow":flow,"endpoint":ep or endpoint or "/","method":method,"hints":["V38: Mule routes are parsed as endpoints instead of generic '/' rows.","Processor/event IDs are grouped into business stages.","Add downstream names in API Registry to override inferred external systems."]}
+    return {"nodes":[{"id":"Client","name":"Client","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"},{"id":api_name or "Application","name":api_name or "Application","tier":"API","count":len(rows or []),"errors":sum(1 for r in rows or [] if r.get("level") in ("ERROR","FAILURE")),"warns":0,"avg_latency_ms":0,"health":"ok"},{"id":"Response","name":"Response","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"}],"edges":[{"from":"Client","to":api_name or "Application","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"request","error_rate":0},{"from":api_name or "Application","to":"Response","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"returns","error_rate":0}],"traces":[],"matrix":[],"tiers":["Client","API"],"simple_flow":["Client",api_name or "Application","Response"],"hints":["No Mule processor rows detected; showing a minimal API flow."]}
+
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -2754,6 +2916,28 @@ def usage():
 @login_required
 def connectors():
     user = get_current_user()
+    if request.method == "DELETE":
+        data = request.get_json(force=True, silent=True) or {}
+        rid = data.get("id") or request.args.get("id")
+        api_name = data.get("api_name") or request.args.get("api_name")
+        env = str(data.get("environment") or request.args.get("environment") or "PROD").upper()[:20]
+        q = ApiRegistry.query.filter_by(user_id=user.id)
+        if rid:
+            q = q.filter_by(id=int(rid))
+        elif api_name:
+            q = q.filter_by(api_name=str(api_name), environment=env)
+        else:
+            return jsonify({"error":"id or api_name is required"}), 400
+        reg = q.first()
+        if not reg:
+            return jsonify({"error":"API registry entry not found"}), 404
+        ApiEndpoint.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        ApiFlowMap.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        FlowEdge.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        audit_event(user, "api_registry.delete", reg.api_name, {"environment": reg.environment})
+        db.session.delete(reg)
+        db.session.commit()
+        return jsonify({"status":"deleted"})
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         allowed_kinds = {"s3", "cloudwatch", "mulesoft", "kafka", "webhook", "slack", "teams"}
@@ -2989,7 +3173,7 @@ def api_system_map():
 
 
 
-@app.route("/api/v1/api-registry", methods=["GET", "POST"])
+@app.route("/api/v1/api-registry", methods=["GET", "POST", "DELETE"])
 @login_required
 def api_registry_inventory():
     user = get_current_user()
