@@ -943,10 +943,15 @@ def build_log_rows(records, env, filename=""):
         line = "\n".join(rec.get("message") or [])
         current_file = rec.get("file") or current_file
         app = extract_first([
-            r"\[([a-zA-Z][a-zA-Z0-9_-]*(?:api|API)[a-zA-Z0-9_-]*)\]",
-            r'"ApplicationName"\s*:\s*"([^"\n]+)"',
-            r"(?:app|application|service|applicationName)\s*[=:]\s*['\"]?([a-zA-Z0-9_.-]+)"
+            r"\[([a-zA-Z][a-zA-Z0-9_.-]*(?:api|API)[a-zA-Z0-9_.-]*)\]",
+            r'"(?:ApplicationName|applicationName|application|app|apiName|serviceName|muleAppName)"\s*:\s*"([^"\n]+)"',
+            r"(?:app|application|service|applicationName|apiName|serviceName|muleAppName)\s*[=:]\s*['\"]?([a-zA-Z0-9_.-]+)",
+            r"\[([^\]]*(?:api|API)[^\]]*)\]"
         ], line, current_app or "unknown")
+        if app and '].' in app:
+            # Mule thread names can contain '[api].flow'; keep only API token.
+            mm = re.search(r'([A-Za-z0-9_.-]*(?:api|API)[A-Za-z0-9_.-]*)', app)
+            app = mm.group(1) if mm else app
         if app != "unknown": current_app=app
         trace = extract_trace_id(line)
         status = extract_first([r'"HttpStatus"\s*:\s*(\d{3})', r"(?:status|statusCode|httpStatus)\s*[=:]\s*(\d{3})", r"\b(5\d\d|4\d\d|2\d\d)\b"], line, "")
@@ -1553,7 +1558,14 @@ def _row_api_name(row, fallback="unknown-api"):
     return _clean_service_name(row.get("app") or row.get("application") or fallback or "unknown-api")
 
 def _row_endpoint(row):
-    return _normalise_endpoint(row.get("endpoint") or row.get("path") or row.get("uri") or "/") or "/"
+    raw = row.get("endpoint") or row.get("path") or row.get("uri") or ""
+    if not raw:
+        msg = str(row.get("message") or "")
+        m = re.search(r'\b(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/[^\s?"\']+)', msg, re.I)
+        if not m:
+            m = re.search(r'"(?:uri|requestUri|path|requestPath|url|endpoint)"\s*:\s*"(/[^"]+)"', msg, re.I)
+        raw = m.group(1) if m else "/"
+    return _normalise_endpoint(raw) or "/"
 
 def _row_trace(row):
     return str(row.get("trace") or row.get("trace_id") or row.get("correlationId") or row.get("event") or "")[:160]
@@ -3195,6 +3207,142 @@ def billing_usage():
         "users": members, "retention_days": limits["retention_days"], "alerts": alerts,
         "limits": limits
     })
+
+
+# ── V30 Enterprise foundations: RCA, trace compare, live anomalies, SLA, search, reports ──
+def _latest_rows_for_user(user_id, limit=5000):
+    rows = []
+    events = LogEvent.query.filter_by(user_id=user_id).order_by(LogEvent.created_at.desc()).limit(limit).all()
+    for e in events:
+        row = _json_loads_safe(e.row_json, {}) or {}
+        row.setdefault("time", e.event_time)
+        row.setdefault("env", e.environment)
+        row.setdefault("app", e.api_name)
+        row.setdefault("api", e.api_name)
+        row.setdefault("endpoint", e.endpoint)
+        row.setdefault("trace", e.trace_id)
+        row.setdefault("level", e.level)
+        row.setdefault("latency", e.latency_ms)
+        row.setdefault("message", e.message)
+        rows.append(row)
+    if rows:
+        return rows
+    sessions = LogSession.query.filter_by(user_id=user_id).order_by(LogSession.created_at.desc()).limit(5).all()
+    for sess in sessions:
+        rows.extend(_json_loads_safe(sess.log_rows_json, []) or [])
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+def _score_endpoint(rows):
+    total = len(rows)
+    errors = sum(1 for r in rows if str(r.get('level','')).upper() in ('ERROR','FAILURE','FATAL'))
+    warns = sum(1 for r in rows if str(r.get('level','')).upper() == 'WARN')
+    latencies = sorted([int(r.get('latency') or r.get('latency_ms') or 0) for r in rows if str(r.get('latency') or r.get('latency_ms') or '').isdigit()])
+    avg = round(sum(latencies)/len(latencies)) if latencies else 0
+    p95 = latencies[min(len(latencies)-1, int(len(latencies)*.95))] if latencies else 0
+    err_rate = round(errors/max(1,total)*100, 2)
+    latency_score = max(0, 25 - min(25, p95/200))
+    error_score = max(0, 30 - min(30, err_rate*4))
+    availability = max(0, 25 - min(25, errors*100/max(1,total)))
+    freshness = 10
+    stability = max(0, 10 - min(10, warns*100/max(1,total)))
+    score = round(latency_score + error_score + availability + freshness + stability)
+    return {"score": score, "total": total, "errors": errors, "warnings": warns, "avg_latency_ms": avg, "p95_latency_ms": p95, "error_rate": err_rate,
+            "status": "Healthy" if score >= 90 else "Watch" if score >= 70 else "Breach risk",
+            "why": [f"{err_rate}% error rate", f"P95 {p95}ms", f"{warns} warning signals"]}
+
+def _build_rca(rows, api_name='', endpoint=''):
+    scoped = [r for r in rows if (not api_name or api_name.lower() in str(r.get('app') or r.get('api') or r.get('api_name') or '').lower()) and (not endpoint or endpoint in str(r.get('endpoint') or r.get('flow') or r.get('message') or ''))]
+    if not scoped: scoped = rows
+    err_rows = [r for r in scoped if str(r.get('level','')).upper() in ('ERROR','FAILURE','FATAL') or re.search(r'exception|timeout|failed|failure|refused|unavailable', str(r.get('message','')), re.I)]
+    clusters = {}
+    for r in err_rows:
+        msg = re.sub(r'\b\d{2,}\b', '#', str(r.get('message',''))[:300])
+        key = (re.search(r'(timeout|exception|refused|unavailable|unauthorized|forbidden|connection|database|db|downstream|soap|http\s*5\d\d|http\s*4\d\d)', msg, re.I) or [None, 'General failure'])[1]
+        clusters.setdefault(key.lower(), {"count":0,"samples":[],"apps":set(),"traces":set()})
+        clusters[key.lower()]["count"] += 1
+        clusters[key.lower()]["apps"].add(str(r.get('app') or r.get('api') or 'unknown'))
+        if r.get('trace') or r.get('event'): clusters[key.lower()]["traces"].add(str(r.get('trace') or r.get('event')))
+        if len(clusters[key.lower()]["samples"]) < 3: clusters[key.lower()]["samples"].append(str(r.get('message',''))[:500])
+    top = sorted(clusters.items(), key=lambda kv: kv[1]['count'], reverse=True)[:5]
+    owner = 'Unassigned'
+    if api_name:
+        reg = ApiRegistry.query.filter(ApiRegistry.api_name.ilike(f"%{api_name}%")).first()
+        if reg and reg.owner: owner = reg.owner
+    cause = "No failure pattern detected yet. Upload richer logs with trace IDs and endpoint names." if not top else f"Most likely cause: {top[0][0]} cluster affecting {', '.join(list(top[0][1]['apps'])[:3])}."
+    return {"summary": cause, "confidence": min(95, 25 + len(err_rows)*3 + len(top)*10), "owner": owner,
+            "clusters": [{"name":k,"count":v['count'],"apps":sorted(v['apps']),"traces":list(v['traces'])[:5],"samples":v['samples']} for k,v in top],
+            "next_steps": ["Open the highest-error trace and read the first ERROR plus the preceding INFO lines.", "Compare a failed trace against a successful trace for the same endpoint.", "Assign the incident to the mapped API owner/downstream team."]}
+
+@app.route('/api/v1/enterprise/global-search')
+@login_required
+def enterprise_global_search():
+    user = get_current_user(); q = request.args.get('q','').strip(); env = request.args.get('env','').strip().upper(); limit = min(int(request.args.get('limit', 25)), 100)
+    rows = search_indexed_log_events(user.id, q, env or 'ALL', limit) if q else _latest_rows_for_user(user.id, limit)
+    registry = []
+    if q:
+        regs = ApiRegistry.query.filter_by(user_id=user.id).filter(db.or_(ApiRegistry.api_name.ilike(f'%{q}%'), ApiRegistry.owner.ilike(f'%{q}%'), ApiRegistry.base_url.ilike(f'%{q}%'))).limit(10).all()
+        registry = [{"type":"api","api_name":r.api_name,"owner":r.owner,"environment":r.environment,"base_url":r.base_url} for r in regs]
+    return jsonify({"query":q,"results":[{"type":"log","time":r.get('time') or r.get('event_time'),"level":r.get('level'),"api":r.get('app') or r.get('api') or r.get('api_name'),"endpoint":r.get('endpoint') or r.get('flow'),"trace":r.get('trace') or r.get('event'),"message":str(r.get('message',''))[:600]} for r in rows] + registry})
+
+@app.route('/api/v1/enterprise/live-alerts')
+@login_required
+def enterprise_live_alerts():
+    user = get_current_user(); rows = _latest_rows_for_user(user.id, 1000)
+    score = _score_endpoint(rows); rca = _build_rca(rows)
+    alerts=[]
+    if score['errors']: alerts.append({"level":"critical" if score['error_rate']>5 else "warn", "title":"Error spike detected", "message":f"{score['errors']} errors across latest {score['total']} events", "owner":rca.get('owner','Unassigned')})
+    if score['p95_latency_ms']>3000: alerts.append({"level":"warn", "title":"Latency anomaly", "message":f"P95 latency is {score['p95_latency_ms']}ms", "owner":rca.get('owner','Unassigned')})
+    if not alerts: alerts.append({"level":"ok","title":"No live anomaly","message":"Latest baseline is stable. Alerts improve as more logs are ingested.","owner":"ObserveX"})
+    return jsonify({"alerts": alerts[:8], "health": score})
+
+@app.route('/api/v1/enterprise/rca')
+@login_required
+def enterprise_rca():
+    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000)
+    return jsonify(_build_rca(rows, request.args.get('api_name',''), request.args.get('endpoint','')))
+
+@app.route('/api/v1/enterprise/sla')
+@login_required
+def enterprise_sla():
+    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); api=request.args.get('api_name',''); ep=request.args.get('endpoint','')
+    scoped=[r for r in rows if (not api or api.lower() in str(r.get('app') or r.get('api') or '').lower()) and (not ep or ep in str(r.get('endpoint') or r.get('flow') or r.get('message') or ''))]
+    return jsonify(_score_endpoint(scoped or rows))
+
+@app.route('/api/v1/enterprise/trace-compare')
+@login_required
+def enterprise_trace_compare():
+    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); a=request.args.get('a','').strip(); b=request.args.get('b','').strip(); api=request.args.get('api_name',''); ep=request.args.get('endpoint','')
+    def trace_rows(tid): return [r for r in rows if tid and tid in str(r.get('trace') or r.get('event') or r.get('message') or '')]
+    traces={}
+    for r in rows:
+        tid=str(r.get('trace') or r.get('event') or '')
+        if tid: traces.setdefault(tid, []).append(r)
+    if not a:
+        failed=[(tid,rs) for tid,rs in traces.items() if any(str(x.get('level','')).upper() in ('ERROR','FAILURE','FATAL') for x in rs)]
+        if failed: a=sorted(failed, key=lambda x: len(x[1]), reverse=True)[0][0]
+    if not b:
+        good=[(tid,rs) for tid,rs in traces.items() if tid!=a and not any(str(x.get('level','')).upper() in ('ERROR','FAILURE','FATAL') for x in rs)]
+        if good: b=sorted(good, key=lambda x: len(x[1]), reverse=True)[0][0]
+    ar,br=trace_rows(a),trace_rows(b)
+    def steps(rs):
+        out=[]
+        for r in rs[:80]:
+            out.append({"time":r.get('time'),"level":r.get('level'),"api":r.get('app') or r.get('api'),"endpoint":r.get('endpoint') or r.get('flow'),"latency":r.get('latency') or 0,"message":str(r.get('message',''))[:300]})
+        return out
+    first_diff='No comparable traces yet.'
+    for i,(x,y) in enumerate(zip(ar,br)):
+        if str(x.get('level'))!=str(y.get('level')) or str(x.get('app'))!=str(y.get('app')):
+            first_diff=f"First divergence at step {i+1}: failed={x.get('level')} {x.get('app')} vs success={y.get('level')} {y.get('app')}"; break
+    return jsonify({"failed_trace":a,"success_trace":b,"first_difference":first_diff,"failed_steps":steps(ar),"success_steps":steps(br)})
+
+@app.route('/api/v1/enterprise/report')
+@login_required
+def enterprise_report():
+    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); sla=_score_endpoint(rows); rca=_build_rca(rows)
+    lines=["ObserveX Executive Reliability Report", f"Generated: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", "", f"Health score: {sla['score']}/100 ({sla['status']})", f"Events analysed: {sla['total']}", f"Errors: {sla['errors']} · Warnings: {sla['warnings']} · Error rate: {sla['error_rate']}%", f"Average latency: {sla['avg_latency_ms']}ms · P95 latency: {sla['p95_latency_ms']}ms", "", "RCA Summary:", rca['summary'], f"Suggested owner: {rca.get('owner','Unassigned')}", "", "Recommended actions:"] + [f"- {x}" for x in rca.get('next_steps', [])]
+    return Response("\n".join(lines), mimetype='text/plain', headers={"Content-Disposition":"attachment; filename=observex-executive-report.txt"})
 
 
 if __name__ == "__main__":
