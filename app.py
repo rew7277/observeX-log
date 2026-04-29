@@ -840,7 +840,13 @@ def build_log_rows(records, env, filename=""):
         if app != "unknown": current_app=app
         trace = extract_trace_id(line)
         status = extract_first([r'"HttpStatus"\s*:\s*(\d{3})', r"(?:status|statusCode|httpStatus)\s*[=:]\s*(\d{3})", r"\b(5\d\d|4\d\d|2\d\d)\b"], line, "")
-        lat = extract_first([r"(?:latency|duration|timeTaken|elapsed)\s*[=: ]+([0-9]+)", r"completed in\s+([0-9]+)\s*ms"], line, "")
+        lat = extract_first([
+            r"(?:latency|duration|timeTaken|elapsed|responseTime|processingTime|executionTime|timetaken|response_time)\s*[=: ]+([0-9]+)",
+            r"completed\s+in\s+([0-9]+)\s*ms",
+            r"time\s*[=:]\s*([0-9]+)\s*ms",
+            r'"(?:latency|duration|timeTaken|elapsed|responseTime|processingTime|executionTime)"\s*:\s*([0-9]+)',
+            r'\b([0-9]+)\s*ms\b',
+        ], line, "")
         if not lat:
             times = re.findall(r'"TimestampIST"\s*:\s*"([^"]+)"', line, re.I)
             if len(times) >= 2:
@@ -1048,116 +1054,291 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
 # ── System Map extraction ─────────────────────────────────────────────────────
 
 def _clean_service_name(value: str) -> str:
-    """Convert noisy log processor names into readable architecture nodes."""
+    """Convert noisy log processor names into readable architecture service nodes."""
     s = str(value or '').strip().strip('"\'[]{}(),;')
+    if not s: return ''
+    # Drop log-level prefixes that bleed into names
+    s = re.sub(r'\b(?:INFO|DEBUG|WARN|ERROR|SUCCESS|FAILURE|TRACE|FATAL)\b.*$', '', s, flags=re.I).strip()
+    # Drop escape sequences
     s = re.sub(r'\\[tnr]', ' ', s)
-    s = re.sub(r'processors?/\d+', '', s, flags=re.I)
-    s = re.sub(r'/(?:processors?|subflows?)/?\d*', '', s, flags=re.I)
+    # Drop before/after request to prefix
     s = re.sub(r'\b(?:before|after)\s+request\s+to\s+', '', s, flags=re.I)
-    s = re.sub(r'\b(?:INFO|DEBUG|WARN|ERROR|SUCCESS|FAILURE)\b.*$', '', s, flags=re.I)
-    s = re.sub(r'[^A-Za-z0-9_./:-]+', '-', s)
-    s = re.sub(r'-{2,}', '-', s).strip('-_./:')
+    # Drop MuleSoft processor index suffixes like /processors/0, processors/1
+    s = re.sub(r'(?:/processors?/?\d*|/subflows?/?\d*)', '', s, flags=re.I)
+    # Drop path parameter segments that look like REST IDs (not real service names)
+    s = re.sub(r'/\{[^}]+\}', '', s)
+    s = re.sub(r'/\d+(?=/|$)', '', s)
+    # Replace non-alphanumeric runs with single dash
+    s = re.sub(r'[^A-Za-z0-9_.-]+', '-', s)
+    s = re.sub(r'-{2,}', '-', s).strip('-_.')
     if not s or len(s) < 2:
         return ''
-    if len(s) > 48:
-        s = s[:48].rstrip('-_./:')
+    if len(s) > 52:
+        s = s[:52].rstrip('-_.')
     return s
 
 
 def _service_tier(name: str) -> str:
+    """Classify a service name into an architecture tier."""
     low = (name or '').lower()
-    if any(x in low for x in ('client','browser','mobile','postman','consumer')): return 'Client'
-    if any(x in low for x in ('gateway','proxy','apigee','nginx','loadbalancer','lb')): return 'Gateway'
-    if any(x in low for x in ('api','mule','experience','process','s-')): return 'API'
-    if any(x in low for x in ('flow','service','engine','processor','subflow','payment','loan','customer','auth')): return 'Service'
-    if any(x in low for x in ('oracle','postgres','mysql','mongo','redis','db','database','cache')): return 'Data'
-    if any(x in low for x in ('salesforce','cbs','flexcube','kafka','s3','lambda','external','vendor','http')): return 'External'
+    # Sentinel / boundary nodes
+    if low in ('client', 'response', 'external-client'): 
+        return 'Client'
+    if any(x in low for x in ('client', 'browser', 'mobile', 'postman', 'consumer', 'user')):
+        return 'Client'
+    if any(x in low for x in ('gateway', 'proxy', 'apigee', 'nginx', 'lb', 'loadbalancer', 'kong')):
+        return 'Gateway'
+    # MuleSoft experience/process layer APIs
+    if any(x in low for x in ('experience', 'exp-api', '-exp-', 'system-api', 'sys-api')):
+        return 'API'
+    if re.search(r'\bs-[a-z]', low) or any(x in low for x in ('api', 'mule', 'process-api', '-api-')):
+        return 'API'
+    # MuleSoft subflows and implementation flows are Services
+    if any(x in low for x in ('subflow', 'impl', 'flow', 'processor', 'engine', 'service', 'handler', 'worker', 'payment', 'loan', 'customer', 'auth', 'validator', 'transformer')):
+        return 'Service'
+    if any(x in low for x in ('oracle', 'postgres', 'mysql', 'mongo', 'redis', 'db', 'database', 'cache', 'mssql', 'jdbc')):
+        return 'Data'
+    if any(x in low for x in ('salesforce', 'cbs', 'flexcube', 'kafka', 's3', 'lambda', 'external', 'vendor', 'http', 'soap', 'sftp', 'ftp', 'smtp')):
+        return 'External'
     return 'Service'
 
 
 def _normalise_endpoint(endpoint: str) -> str:
+    """Normalise a REST endpoint path. Returns '' if value looks like a service/flow name not an HTTP path."""
     ep = str(endpoint or '').split('?')[0].strip()
-    if not ep or ep == '__root__': return '/'
+    if not ep or ep == '__root__':
+        return '/'
+    # If it doesn't start with '/' it's likely a flow/service name, not an HTTP path
+    if not ep.startswith('/'):
+        return '/'
+    # Replace numeric IDs and UUIDs in path segments
     ep = re.sub(r'/\d+(?=/|$)', '/{id}', ep)
     ep = re.sub(r'/[0-9a-fA-F-]{8,}(?=/|$)', '/{id}', ep)
+    # Collapse overly long subflow-style paths (MuleSoft emits full flow names as paths sometimes)
+    # A valid REST endpoint has ≤ 8 segments; anything longer is a flow descriptor
+    parts = [p for p in ep.split('/') if p]
+    if len(parts) > 8:
+        ep = '/' + '/'.join(parts[:8])
     return ep[:220]
 
 
 def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = '', endpoint: str = '') -> dict:
-    """Build an architecture-level topology from logs: tiered nodes, edges, trace waterfall and call matrix."""
-    node_map, edge_map, traces = {}, {}, {}
-    def add_node(name, tier=None, row=None):
+    """
+    Build an architecture-level topology from logs.
+    Produces: tiered nodes, directed edges, trace waterfall, service call matrix.
+    Handles MuleSoft flow logs, standard microservice logs, and JSON-structured logs.
+    """
+    node_map: dict = {}
+    edge_map: dict = {}
+    traces: dict = {}
+
+    def add_node(name: str, tier: str = None, row: dict = None) -> str:
         name = _clean_service_name(name)
-        if not name: return ''
+        if not name or len(name) < 2:
+            return ''
         tier = tier or _service_tier(name)
-        n = node_map.setdefault(name, {"id": name, "name": name, "tier": tier, "count": 0, "errors": 0, "warns": 0, "latencies": []})
+        n = node_map.setdefault(name, {
+            "id": name, "name": name, "tier": tier,
+            "count": 0, "errors": 0, "warns": 0, "latencies": []
+        })
         n['count'] += 1
         if row:
-            n['errors'] += 1 if row.get('level') in ('ERROR','FAILURE') else 0
-            n['warns'] += 1 if row.get('level') == 'WARN' else 0
-            if row.get('latency'): n['latencies'].append(int(row.get('latency') or 0))
+            lvl = row.get('level', '')
+            n['errors'] += 1 if lvl in ('ERROR', 'FAILURE') else 0
+            n['warns']  += 1 if lvl == 'WARN' else 0
+            lat = row.get('latency')
+            if lat and int(lat) > 0:
+                n['latencies'].append(int(lat))
         return name
-    def add_edge(src, dst, row=None, label='calls'):
-        src, dst = add_node(src, row=row), add_node(dst, row=row)
-        if not src or not dst or src == dst: return
+
+    def add_edge(src: str, dst: str, row: dict = None, label: str = 'calls') -> None:
+        src = _clean_service_name(src)
+        dst = _clean_service_name(dst)
+        if not src or not dst or src == dst:
+            return
+        # Ensure both nodes exist
+        add_node(src)
+        add_node(dst)
         key = (src, dst)
-        e = edge_map.setdefault(key, {"from": src, "to": dst, "count": 0, "errors": 0, "latencies": [], "label": label})
+        e = edge_map.setdefault(key, {
+            "from": src, "to": dst,
+            "count": 0, "errors": 0, "latencies": [], "label": label
+        })
         e['count'] += 1
         if row:
-            e['errors'] += 1 if row.get('level') in ('ERROR','FAILURE') else 0
-            if row.get('latency'): e['latencies'].append(int(row.get('latency') or 0))
-    # regexes for MuleSoft/API logs and common microservice logs
-    flow_re = re.compile(r'(?:flow(?:Name)?|subflow|processor|route)\s*[=:]\s*["\']?([A-Za-z0-9_.:/-]{3,120})', re.I)
-    before_re = re.compile(r'before\s+request\s+to\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
-    after_re = re.compile(r'after\s+request\s+to\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
-    call_re = re.compile(r'\b(?:calling|call to|request to|response from|connect(?:ing)? to)\s+([A-Za-z0-9_.:/-]{3,120})', re.I)
-    app_re = re.compile(r'(?:application|app|service|api)\s*[=:]\s*["\']?([A-Za-z0-9_.:/-]{3,80})', re.I)
-    for idx, r in enumerate(rows or []):
-        msg = r.get('message','') or ''
-        app = _clean_service_name(r.get('app') or api_name or 'Unknown API') or 'Unknown API'
-        ep = _normalise_endpoint(endpoint or r.get('flow') or '')
+            lvl = row.get('level', '')
+            e['errors'] += 1 if lvl in ('ERROR', 'FAILURE') else 0
+            lat = row.get('latency')
+            if lat and int(lat) > 0:
+                e['latencies'].append(int(lat))
+
+    # ── Compiled regexes for hop extraction ──────────────────────────────────
+    # MuleSoft flow/subflow names in log lines
+    flow_re    = re.compile(r'(?:flow(?:Name)?|subflow|route)\s*[=:]\s*["\']?([A-Za-z0-9_][A-Za-z0-9_.:-]{2,80})', re.I)
+    # "before request to X" / "after request to X"
+    before_re  = re.compile(r'before\s+request\s+to\s+["\']?([A-Za-z0-9_][A-Za-z0-9_.:/%-]{2,100})', re.I)
+    after_re   = re.compile(r'after\s+request\s+to\s+["\']?([A-Za-z0-9_][A-Za-z0-9_.:/%-]{2,100})', re.I)
+    # Generic call/connect patterns
+    call_re    = re.compile(r'\b(?:calling|call to|request to|response from|connecting to|connect to|invoking|invoked)\s+["\']?([A-Za-z0-9_][A-Za-z0-9_.:/%-]{2,100})', re.I)
+    # JSON key-value: "service":"x", "component":"x", "target":"x"
+    svc_re     = re.compile(r'"(?:service|component|target|destination|callee|caller)"\s*:\s*"([A-Za-z0-9_][A-Za-z0-9_.:-]{1,80})"', re.I)
+    # processor: X in log lines
+    proc_re    = re.compile(r'processor:\s*([A-Za-z0-9_][A-Za-z0-9_.:/-]{2,80})', re.I)
+
+    # Words to exclude from hop names (common log noise)
+    NOISE = {
+        'true','false','null','none','get','post','put','delete','patch',
+        'http','https','200','201','400','401','403','404','500','502','503',
+        'info','debug','warn','error','success','failure','trace',
+        'request','response','message','event','log','line',
+    }
+
+    def _is_valid_hop(name: str) -> bool:
+        """Filter out paths, URLs, log-level words and very short tokens."""
+        if not name or len(name) < 3:
+            return False
+        low = name.lower()
+        if low in NOISE:
+            return False
+        # Reject if it looks like a URL path segment starting with /
+        if name.startswith('/'):
+            return False
+        # Reject pure numeric strings
+        if re.match(r'^\d+$', name):
+            return False
+        return True
+
+    # ── Main extraction loop ──────────────────────────────────────────────────
+    for r in (rows or []):
+        msg  = r.get('message', '') or ''
+        app  = _clean_service_name(r.get('app') or api_name or 'Unknown-API') or 'Unknown-API'
+        lvl  = r.get('level', '')
+        trace_id = r.get('trace') or r.get('event') or ''
+        ep   = _normalise_endpoint(endpoint or '')
+
+        # The primary node for this log line is the API/app itself
         current = add_node(app, 'API', r)
-        ordered = [current]
-        for regex in (app_re, flow_re, before_re, call_re, after_re):
-            for m in regex.finditer(msg):
-                name = _clean_service_name(m.group(1))
-                if name and name.lower() not in [x.lower() for x in ordered]:
-                    ordered.append(name)
-        # Keep architecture readable: app -> detected hops -> response
-        if len(ordered) == 1 and ep and ep != '/':
-            ordered.append(ep)
-        if ordered:
-            add_node('Client', 'Client', r)
-            add_edge('Client', ordered[0], r, 'entry')
-            for a,b in zip(ordered, ordered[1:]): add_edge(a,b,r,'calls')
-            add_node('Response', 'Client', r)
-            add_edge(ordered[-1], 'Response', r, 'returns')
-        trace = r.get('trace') or r.get('event') or ''
-        if trace:
-            tr = traces.setdefault(trace, {"trace": trace, "rows": [], "errors": 0, "latency": 0, "endpoint": ep, "api": app})
-            tr['rows'].append({"time": r.get('time',''), "service": ordered[-1] if ordered else app, "level": r.get('level',''), "message": msg[:240], "latency": int(r.get('latency') or 0)})
-            tr['errors'] += 1 if r.get('level') in ('ERROR','FAILURE') else 0
-            tr['latency'] = max(tr['latency'], int(r.get('latency') or 0))
-    nodes=[]
+        hops = [current] if current else []
+
+        # --- Extract additional hops from the message -----------------------
+        candidates = []
+
+        # MuleSoft flow names (clean, well-structured)
+        for m in flow_re.finditer(msg):
+            candidates.append(_clean_service_name(m.group(1)))
+
+        # Processor names
+        for m in proc_re.finditer(msg):
+            candidates.append(_clean_service_name(m.group(1)))
+
+        # Before/after request patterns (strong signal: an actual outbound call)
+        for m in before_re.finditer(msg):
+            raw_hop = m.group(1).rstrip('/')
+            # Strip URL scheme & host if it's a full URL; keep the host as service name
+            raw_hop = re.sub(r'^https?://([^/]+).*', r'\1', raw_hop)
+            candidates.append(_clean_service_name(raw_hop))
+
+        for m in after_re.finditer(msg):
+            raw_hop = m.group(1).rstrip('/')
+            raw_hop = re.sub(r'^https?://([^/]+).*', r'\1', raw_hop)
+            candidates.append(_clean_service_name(raw_hop))
+
+        # Generic call/connect patterns
+        for m in call_re.finditer(msg):
+            raw_hop = m.group(1).rstrip('/')
+            raw_hop = re.sub(r'^https?://([^/]+).*', r'\1', raw_hop)
+            candidates.append(_clean_service_name(raw_hop))
+
+        # JSON service/component keys
+        for m in svc_re.finditer(msg):
+            candidates.append(_clean_service_name(m.group(1)))
+
+        # Deduplicate candidates, filter noise, add to hops
+        seen_lower = {h.lower() for h in hops}
+        for c in candidates:
+            if c and _is_valid_hop(c) and c.lower() not in seen_lower:
+                hops.append(c)
+                seen_lower.add(c.lower())
+                add_node(c, row=r)
+
+        # Build the edge chain: Client → hop0 → hop1 → ... → Response
+        add_node('Client', 'Client')
+        add_node('Response', 'Client')
+
+        if hops:
+            add_edge('Client', hops[0], r, 'entry')
+            for a, b in zip(hops, hops[1:]):
+                add_edge(a, b, r, 'calls')
+            add_edge(hops[-1], 'Response', r, 'returns')
+        else:
+            add_edge('Client', current or app, r, 'entry')
+            add_edge(current or app, 'Response', r, 'returns')
+
+        # ── Trace waterfall accumulation ─────────────────────────────────────
+        if trace_id:
+            tr = traces.setdefault(trace_id, {
+                "trace": trace_id, "rows": [],
+                "errors": 0, "latency": 0,
+                "endpoint": ep, "api": app
+            })
+            tr['rows'].append({
+                "time":    r.get('time', ''),
+                "service": hops[-1] if hops else app,
+                "level":   lvl,
+                "message": msg[:280],
+                "latency": int(r.get('latency') or 0)
+            })
+            tr['errors']  += 1 if lvl in ('ERROR', 'FAILURE') else 0
+            tr['latency']  = max(tr['latency'], int(r.get('latency') or 0))
+
+    # ── Finalise nodes ────────────────────────────────────────────────────────
+    tier_order = {"Client": 0, "Gateway": 1, "API": 2, "Service": 3, "External": 4, "Data": 5}
+    nodes = []
     for n in node_map.values():
-        lats=n.pop('latencies', [])
-        n['avg_latency_ms']=round(sum(lats)/len(lats)) if lats else 0
-        n['health']='critical' if n['errors'] else 'warn' if n['warns'] else 'ok'
+        lats = n.pop('latencies', [])
+        n['avg_latency_ms'] = round(sum(lats) / len(lats)) if lats else 0
+        n['health'] = 'critical' if n['errors'] else 'warn' if n['warns'] else 'ok'
         nodes.append(n)
-    edges=[]
+    nodes.sort(key=lambda n: (tier_order.get(n['tier'], 9), n['name']))
+
+    # ── Finalise edges ────────────────────────────────────────────────────────
+    edges = []
     for e in edge_map.values():
-        lats=e.pop('latencies', [])
-        e['avg_latency_ms']=round(sum(lats)/len(lats)) if lats else 0
-        e['error_rate']=round(e['errors']/max(1,e['count'])*100,1)
+        lats = e.pop('latencies', [])
+        e['avg_latency_ms'] = round(sum(lats) / len(lats)) if lats else 0
+        e['error_rate'] = round(e['errors'] / max(1, e['count']) * 100, 1)
         edges.append(e)
-    tier_order={"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}
-    nodes.sort(key=lambda n:(tier_order.get(n['tier'],9), n['name']))
-    edges.sort(key=lambda e:-e['count'])
-    trace_list=sorted(traces.values(), key=lambda t:(-t['errors'], -t['latency'], -len(t['rows'])))[:12]
-    matrix=[]
-    for e in edges[:60]:
-        matrix.append({"from":e['from'],"to":e['to'],"calls":e['count'],"errors":e['errors'],"avg_latency_ms":e['avg_latency_ms'],"error_rate":e['error_rate']})
-    return {"nodes": nodes, "edges": edges, "traces": trace_list, "matrix": matrix, "tiers": sorted(set(n['tier'] for n in nodes), key=lambda x:tier_order.get(x,9))}
+    edges.sort(key=lambda e: -e['count'])
+
+    # ── Call matrix (top 60 edges) ────────────────────────────────────────────
+    matrix = [
+        {
+            "from": e['from'], "to": e['to'],
+            "calls": e['count'], "errors": e['errors'],
+            "avg_latency_ms": e['avg_latency_ms'],
+            "error_rate": e['error_rate']
+        }
+        for e in edges[:60]
+    ]
+
+    # ── Trace list (top 12 most interesting) ─────────────────────────────────
+    trace_list = sorted(
+        traces.values(),
+        key=lambda t: (-t['errors'], -t['latency'], -len(t['rows']))
+    )[:12]
+
+    active_tiers = sorted(
+        set(n['tier'] for n in nodes),
+        key=lambda x: tier_order.get(x, 9)
+    )
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "traces": trace_list,
+        "matrix": matrix,
+        "tiers": active_tiers
+    }
 
 
 def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id: int):
@@ -1166,44 +1347,87 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
     for r in rows:
         api = _clean_service_name(r.get('app') or 'unknown') or 'unknown'
         api_groups.setdefault(api, []).append(r)
+
+    # URI patterns: strictly match HTTP path patterns only (must start with /)
     uri_patterns = [
-        r'"uri"\s*:\s*"(/[^"]+)"', r'"path"\s*:\s*"(/[^"]+)"', r'"requestUri"\s*:\s*"(/[^"]+)"',
-        r'(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s?"]+)', r'(?:uri|url|path|endpoint)\s*[=:]\s*["\']?(/[A-Za-z0-9/_\-.]+)'
+        r'"(?:uri|requestUri|path|requestPath|url)"\s*:\s*"(/[^"?#\s]{1,300})"',
+        r"'(?:uri|requestUri|path|requestPath|url)'\s*:\s*'(/[^'?#\s]{1,300})'",
+        r'(?:uri|url|path|endpoint|requestPath)\s*[=:]\s*["\']?(/[A-Za-z0-9/_\-.{}]+)',
+        r'\b(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(/[A-Za-z0-9/_\-.{}?=&%]+)',
+        r'"HttpMethod"\s*:\s*"[A-Z]+"\s*[,}].*?"(?:uri|path|url)"\s*:\s*"(/[^"]+)"',
     ]
     method_pattern = re.compile(r'\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b', re.I)
-    flow_maps=[]
+
+    flow_maps = []
     for api_name, api_rows in api_groups.items():
         if api_name == 'unknown' and len(api_groups) > 1:
             continue
-        endpoint_groups={}
+
+        endpoint_groups: dict = {}
         for r in api_rows:
-            msg=r.get('message','') or ''
-            ep=''
+            msg = r.get('message', '') or ''
+            ep = ''
+
+            # Try structured URI extraction first
             for pat in uri_patterns:
-                m=re.search(pat,msg,re.I)
+                m = re.search(pat, msg, re.I | re.S)
                 if m:
-                    ep=_normalise_endpoint(m.group(1)); break
+                    candidate = _normalise_endpoint(m.group(1))
+                    # Only accept if it looks like a real REST path (has at least one segment)
+                    if candidate and candidate != '/' and len(candidate) > 1:
+                        ep = candidate
+                        break
+
+            # Do NOT fall back to r.get('flow') — that's a MuleSoft flow name, not an HTTP path
+            # Instead, use the api endpoint passed in context if available
             if not ep:
-                ep=_normalise_endpoint(r.get('flow') or '/')
-            endpoint_groups.setdefault(ep or '/', []).append(r)
+                ep = '/'
+
+            endpoint_groups.setdefault(ep, []).append(r)
+
         for endpoint, ep_rows in endpoint_groups.items():
-            method=''
-            for r in ep_rows[:30]:
-                mm=method_pattern.search(r.get('message','') or '')
-                if mm: method=mm.group(1).upper(); break
-            arch=extract_architecture_graph(ep_rows, raw, env, session_id, user_id, api_name, endpoint)
-            # derive a clean linear fallback flow from the graph, not raw processor fragments
-            flow_steps=['Client']
-            for n in arch.get('nodes',[]):
-                if n['name'] not in flow_steps and n['name'] != 'Response':
+            method = ''
+            for r in ep_rows[:50]:
+                mm = method_pattern.search(r.get('message', '') or '')
+                if mm:
+                    method = mm.group(1).upper()
+                    break
+
+            arch = extract_architecture_graph(ep_rows, raw, env, session_id, user_id, api_name, endpoint)
+
+            # Build a clean linear flow from tier-ordered nodes
+            flow_steps = ['Client']
+            tier_order_vals = {"Client": 0, "Gateway": 1, "API": 2, "Service": 3, "External": 4, "Data": 5}
+            sorted_nodes = sorted(
+                [n for n in arch.get('nodes', []) if n['name'] not in ('Client', 'Response')],
+                key=lambda n: tier_order_vals.get(n['tier'], 9)
+            )
+            for n in sorted_nodes:
+                if n['name'] not in flow_steps:
                     flow_steps.append(n['name'])
-            if 'Response' not in flow_steps: flow_steps.append('Response')
-            req_count=len(ep_rows)
-            err_count=sum(1 for r in ep_rows if r.get('level') in ('ERROR','FAILURE'))
-            lats=[int(r.get('latency') or 0) for r in ep_rows if r.get('latency')]
-            avg_lat=round(sum(lats)/len(lats)) if lats else 0
-            sample_trace=next((r.get('trace') or r.get('event') for r in ep_rows if r.get('trace') or r.get('event')), '')
-            flow_maps.append(ApiFlowMap(user_id=user_id, session_id=session_id, api_name=api_name, environment=env, endpoint=endpoint if endpoint != '/' else '', method=method, flow_steps_json=json.dumps(flow_steps[:14]), architecture_json=json.dumps(arch, default=str), request_count=req_count, error_count=err_count, avg_latency_ms=avg_lat, sample_trace_id=(sample_trace or '')[:120]))
+            if 'Response' not in flow_steps:
+                flow_steps.append('Response')
+
+            req_count  = len(ep_rows)
+            err_count  = sum(1 for r in ep_rows if r.get('level') in ('ERROR', 'FAILURE'))
+            lats       = [int(r.get('latency') or 0) for r in ep_rows if r.get('latency') and int(r.get('latency') or 0) > 0]
+            avg_lat    = round(sum(lats) / len(lats)) if lats else 0
+            sample_trace = next(
+                (r.get('trace') or r.get('event') for r in ep_rows if r.get('trace') or r.get('event')),
+                ''
+            )
+            flow_maps.append(ApiFlowMap(
+                user_id=user_id, session_id=session_id,
+                api_name=api_name, environment=env,
+                endpoint=endpoint if endpoint != '/' else '',
+                method=method,
+                flow_steps_json=json.dumps(flow_steps[:14]),
+                architecture_json=json.dumps(arch, default=str),
+                request_count=req_count,
+                error_count=err_count,
+                avg_latency_ms=avg_lat,
+                sample_trace_id=(sample_trace or '')[:120]
+            ))
     return flow_maps
 
 def send_reset_email(user):
