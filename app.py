@@ -59,15 +59,27 @@ def api_rate_limited(key, limit=120, window=60):
 
 # ── Config ────────────────────────────────────────────────────────────────────
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", "sqlite:///observex.db"
-).replace("postgres://", "postgresql://")
+
+def resolve_database_url():
+    """Resolve a non-empty SQLAlchemy database URL for Railway/local startup."""
+    raw = (os.environ.get("DATABASE_URL") or os.environ.get("DATABASE_PUBLIC_URL") or "").strip()
+    if raw:
+        return raw.replace("postgres://", "postgresql://", 1)
+    return os.environ.get("SQLITE_DATABASE_URL", "sqlite:///observex.db")
+
+DATABASE_CONFIG_WARNING = None
+if not (os.environ.get("DATABASE_URL") or "").strip():
+    if (os.environ.get("DATABASE_PUBLIC_URL") or "").strip():
+        DATABASE_CONFIG_WARNING = "DATABASE_URL is empty; using DATABASE_PUBLIC_URL fallback."
+    else:
+        DATABASE_CONFIG_WARNING = "DATABASE_URL is empty; using SQLite fallback. Link Railway Postgres and set DATABASE_URL for production."
+
+app.config["SQLALCHEMY_DATABASE_URI"] = resolve_database_url()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FLASK_ENV") == "production" or bool(os.environ.get("RAILWAY_ENVIRONMENT"))
-
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
 app.config["MAIL_PORT"]     = int(os.environ.get("MAIL_PORT", 587))
@@ -616,8 +628,24 @@ def init_db_once():
         ensure_runtime_columns()
         migrate_legacy_api_keys()
 
+def init_db_with_retry(max_attempts=6, delay_seconds=2):
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            init_db_once()
+            if DATABASE_CONFIG_WARNING:
+                app.logger.warning(DATABASE_CONFIG_WARNING)
+            return True
+        except Exception as exc:
+            db.session.rollback()
+            last_exc = exc
+            app.logger.warning("Database init attempt %s/%s failed: %s", attempt, max_attempts, exc)
+            time.sleep(delay_seconds)
+    app.logger.exception("Database initialization failed after retries", exc_info=last_exc)
+    return False
+
 with app.app_context():
-    init_db_once()
+    init_db_with_retry()
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
@@ -628,7 +656,7 @@ def request_entity_too_large(error):
 @app.route("/health")
 def health():
     try:
-        db.session.execute(db.text("SELECT 1"))
+        db.session.execute(text("SELECT 1"))
         return jsonify({"status": "ok"}), 200
     except Exception as exc:
         app.logger.exception("Health check failed")
