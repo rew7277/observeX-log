@@ -200,16 +200,34 @@ class User(db.Model):
     api_key_last_used = db.Column(db.DateTime, nullable=True)
 
 class LogSession(db.Model):
-    id          = db.Column(db.Integer, primary_key=True)
-    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"))
-    environment = db.Column(db.String(20))
-    filename    = db.Column(db.String(200))
-    total_lines = db.Column(db.Integer, default=0)
-    error_count = db.Column(db.Integer, default=0)
-    warn_count  = db.Column(db.Integer, default=0)
-    avg_latency = db.Column(db.Integer, default=0)
-    apps_found  = db.Column(db.Text, default="")
-    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey("user.id"))
+    environment    = db.Column(db.String(20))
+    filename       = db.Column(db.String(200))
+    total_lines    = db.Column(db.Integer, default=0)
+    error_count    = db.Column(db.Integer, default=0)
+    warn_count     = db.Column(db.Integer, default=0)
+    avg_latency    = db.Column(db.Integer, default=0)
+    apps_found     = db.Column(db.Text, default="")
+    log_rows_json  = db.Column(db.Text, default="[]")   # Persists parsed rows in Postgres
+    result_json    = db.Column(db.Text, default="{}")   # Full analyse result (summary) for reload
+    created_at     = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class ApiFlowMap(db.Model):
+    """Stores per-API, per-endpoint flow mapping extracted from uploaded logs."""
+    id              = db.Column(db.Integer, primary_key=True)
+    user_id         = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    session_id      = db.Column(db.Integer, db.ForeignKey("log_session.id"), nullable=False)
+    api_name        = db.Column(db.String(200), nullable=False)
+    environment     = db.Column(db.String(20), default="PROD")
+    endpoint        = db.Column(db.String(300), default="")
+    method          = db.Column(db.String(10), default="")
+    flow_steps_json = db.Column(db.Text, default="[]")   # ["Client","Mule API","CBS","Response"]
+    request_count   = db.Column(db.Integer, default=0)
+    error_count     = db.Column(db.Integer, default=0)
+    avg_latency_ms  = db.Column(db.Integer, default=0)
+    sample_trace_id = db.Column(db.String(120), default="")
+    created_at      = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 class AlertRule(db.Model):
     id         = db.Column(db.Integer, primary_key=True)
@@ -469,14 +487,26 @@ def ensure_runtime_columns():
             "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_hash VARCHAR(128)",
             "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_prefix VARCHAR(12)",
             "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_last_used TIMESTAMP",
+            # Log persistence columns
+            "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS log_rows_json TEXT DEFAULT '[]'",
+            "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS result_json TEXT DEFAULT '{}'",
         ]
     else:
-        existing = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
-        if "api_key_hash" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_hash VARCHAR(128)")
-        if "api_key_prefix" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_prefix VARCHAR(12)")
-        if "api_key_last_used" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_last_used DATETIME")
+        existing_user = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
+        if "api_key_hash" not in existing_user: stmts.append("ALTER TABLE user ADD COLUMN api_key_hash VARCHAR(128)")
+        if "api_key_prefix" not in existing_user: stmts.append("ALTER TABLE user ADD COLUMN api_key_prefix VARCHAR(12)")
+        if "api_key_last_used" not in existing_user: stmts.append("ALTER TABLE user ADD COLUMN api_key_last_used DATETIME")
+        try:
+            existing_ls = {row[1] for row in db.session.execute(text("PRAGMA table_info(log_session)")).fetchall()}
+            if "log_rows_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN log_rows_json TEXT DEFAULT '[]'")
+            if "result_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN result_json TEXT DEFAULT '{}'")
+        except Exception:
+            pass
     for stmt in stmts:
-        db.session.execute(text(stmt))
+        try:
+            db.session.execute(text(stmt))
+        except Exception:
+            db.session.rollback()
     db.session.commit()
 
 def migrate_legacy_api_keys():
@@ -1007,6 +1037,107 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         "query_help": "Use env:PROD app:s-htmltopdf-api level:ERROR trace:<id> message:\"otp success\" latency>3000 date:2026-04-11"
     }
 
+
+# ── System Map extraction ─────────────────────────────────────────────────────
+def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id: int):
+    """
+    From analysed log rows, extract per-API, per-endpoint flow maps.
+    Returns a list of ApiFlowMap objects (unsaved) ready to db.session.add().
+    """
+    # 1. Group rows by detected API name
+    api_groups: dict = {}
+    for r in rows:
+        api = (r.get("app") or "unknown").strip()
+        api_groups.setdefault(api, []).append(r)
+
+    # Endpoint extraction patterns (URI paths)
+    uri_patterns = [
+        r'"uri"\s*:\s*"(/[^"]+)"',
+        r'"path"\s*:\s*"(/[^"]+)"',
+        r'"requestUri"\s*:\s*"(/[^"]+)"',
+        r'(?:GET|POST|PUT|DELETE|PATCH)\s+(/[^\s?"]+)',
+        r'(?:uri|url|path|endpoint)\s*[=:]\s*["\']?(/[A-Za-z0-9/_\-\.]+)',
+    ]
+    method_pattern = re.compile(r'\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b', re.I)
+    # Flow-step service name heuristics
+    flow_step_patterns = [
+        r'before request to ([A-Za-z0-9_\-\.]+)',
+        r'after request to ([A-Za-z0-9_\-\.]+)',
+        r'"FlowName"\s*:\s*"([^"]+)"',
+        r'processor:\s*([^;\]\n]+)',
+        r'\b(Mule|MuleSoft|CBS|Flexcube|Payment[A-Za-z]*|Oracle|Kafka|Redis|Mongo|Postgres|S3|Lambda|Gateway|Proxy|Cache|Auth)\w*\b',
+    ]
+
+    flow_maps = []
+    for api_name, api_rows in api_groups.items():
+        if api_name == "unknown" and len(api_groups) > 1:
+            continue
+
+        # Group by endpoint
+        endpoint_groups: dict = {}
+        for r in api_rows:
+            msg = r.get("message", "")
+            ep = ""
+            for pat in uri_patterns:
+                m = re.search(pat, msg, re.I)
+                if m:
+                    # Normalise: strip query params, limit length
+                    ep = m.group(1).split("?")[0][:200]
+                    break
+            endpoint_groups.setdefault(ep or "__root__", []).append(r)
+
+        for endpoint, ep_rows in endpoint_groups.items():
+            # Method detection
+            method = ""
+            for r in ep_rows[:20]:
+                mm = method_pattern.search(r.get("message", ""))
+                if mm:
+                    method = mm.group(1).upper()
+                    break
+
+            # Flow steps: extract service names in order of first appearance
+            step_set_ordered: list = []
+            seen_steps: set = set()
+            all_msg = " ".join(r.get("message", "") for r in ep_rows)
+            for pat in flow_step_patterns:
+                for m in re.finditer(pat, all_msg, re.I):
+                    step = m.group(1).strip()[:60]
+                    step_clean = re.sub(r'\s+', ' ', step).strip()
+                    if step_clean and step_clean.lower() not in seen_steps and len(step_clean) > 2:
+                        seen_steps.add(step_clean.lower())
+                        step_set_ordered.append(step_clean)
+            # Build canonical flow: Client → [detected steps] → Response
+            flow_steps = ["Client"] + step_set_ordered[:8]
+            if api_name not in flow_steps:
+                flow_steps.insert(1, api_name)
+            if "Response" not in flow_steps:
+                flow_steps.append("Response")
+
+            # Stats
+            req_count = len(ep_rows)
+            err_count = sum(1 for r in ep_rows if r.get("level") in ("ERROR", "FAILURE"))
+            lats = [r["latency"] for r in ep_rows if r.get("latency")]
+            avg_lat = round(sum(lats) / len(lats)) if lats else 0
+            sample_trace = next((r.get("trace") or r.get("event") for r in ep_rows if r.get("trace") or r.get("event")), "")
+
+            fm = ApiFlowMap(
+                user_id=user_id,
+                session_id=session_id,
+                api_name=api_name,
+                environment=env,
+                endpoint="" if endpoint == "__root__" else endpoint,
+                method=method,
+                flow_steps_json=json.dumps(flow_steps),
+                request_count=req_count,
+                error_count=err_count,
+                avg_latency_ms=avg_lat,
+                sample_trace_id=sample_trace[:120] if sample_trace else "",
+            )
+            flow_maps.append(fm)
+
+    return flow_maps
+
+
 def send_reset_email(user):
     token   = secrets.token_urlsafe(40)
     expires = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
@@ -1251,12 +1382,29 @@ def analyse():
         user = get_current_user()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
+        # Persist log rows in Postgres so they survive sign-out/sign-in (up to 2000 rows)
+        rows_to_store = result.get("log_rows", [])[:2000]
+        result_summary = {k: v for k, v in result.items() if k != "log_rows"}
+
         ls = LogSession(user_id=user.id, environment=env, filename=fname,
                         total_lines=result["total"], error_count=result["errors"],
                         warn_count=result["warns"], avg_latency=result["latency"],
-                        apps_found=",".join(result["apps"]))
+                        apps_found=",".join(result["apps"]),
+                        log_rows_json=json.dumps(rows_to_store, default=str),
+                        result_json=json.dumps(result_summary, default=str))
         db.session.add(ls)
         db.session.commit()
+
+        # Build and persist API flow maps for System Map page
+        try:
+            flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user.id)
+            for fm in flow_maps:
+                db.session.add(fm)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("System map extraction failed (non-fatal)")
+
         try:
             persist_raw_upload(user.id, ls.id, fname, raw)
         except Exception:
@@ -1477,10 +1625,13 @@ def history():
             item = q.filter_by(id=sid).first()
             if item:
                 delete_persisted_upload(uid, item.id)
+                # Cascade-delete system map entries for this session
+                ApiFlowMap.query.filter_by(user_id=uid, session_id=item.id).delete()
                 db.session.delete(item)
         else:
             for item in q.all():
                 delete_persisted_upload(uid, item.id)
+                ApiFlowMap.query.filter_by(user_id=uid, session_id=item.id).delete()
                 db.session.delete(item)
         audit_event(user, 'logs.delete', sid or 'all', {'scope':'history_delete'})
         db.session.commit()
@@ -1673,6 +1824,107 @@ def alert_destinations():
         return jsonify({"status":"deleted"})
     rows = AlertDestination.query.filter_by(user_id=user.id).order_by(AlertDestination.created_at.desc()).all()
     return jsonify([{"id": d.id, "kind": d.kind, "target": d.target, "active": d.active, "at": d.created_at.strftime("%Y-%m-%d %H:%M")} for d in rows])
+
+# ── Session log rows (Postgres-persisted, survives sign-out) ─────────────────
+@app.route("/api/v1/sessions/<int:session_id>/rows", methods=["GET"])
+@login_required
+def session_rows(session_id):
+    """Return the Postgres-persisted log rows for a previous session."""
+    user = get_current_user()
+    ls = LogSession.query.filter_by(id=session_id, user_id=user.id).first_or_404()
+    try:
+        rows = json.loads(ls.log_rows_json or "[]")
+    except Exception:
+        rows = []
+    try:
+        result = json.loads(ls.result_json or "{}")
+    except Exception:
+        result = {}
+    result["log_rows"] = rows
+    result["session_id"] = ls.id
+    result["stored"] = True
+    result["reloaded"] = True
+    if not result.get("total"):
+        result["total"] = ls.total_lines
+    if not result.get("errors"):
+        result["errors"] = ls.error_count
+    if not result.get("warns"):
+        result["warns"] = ls.warn_count
+    if not result.get("latency"):
+        result["latency"] = ls.avg_latency
+    if not result.get("apps"):
+        result["apps"] = [a for a in (ls.apps_found or "").split(",") if a]
+    return jsonify(result)
+
+
+# ── System Map API ────────────────────────────────────────────────────────────
+@app.route("/api/v1/system-map", methods=["GET"])
+@login_required
+def api_system_map():
+    """
+    Return structured system map data grouped by API name → endpoint → flow.
+    Optional query params: env (PROD/UAT/DEV/DR), api_name, limit (default 200)
+    """
+    user = get_current_user()
+    env_filter  = request.args.get("env", "").strip().upper()
+    api_filter  = request.args.get("api_name", "").strip()
+    limit       = min(int(request.args.get("limit", 200)), 500)
+
+    q = ApiFlowMap.query.filter_by(user_id=user.id)
+    if env_filter:
+        q = q.filter(ApiFlowMap.environment.ilike(env_filter))
+    if api_filter:
+        q = q.filter(ApiFlowMap.api_name.ilike(f"%{api_filter}%"))
+    records = q.order_by(ApiFlowMap.created_at.desc()).limit(limit).all()
+
+    # Build hierarchy: api_name → [endpoints]
+    api_map: dict = {}
+    for r in records:
+        api_map.setdefault(r.api_name, {
+            "api_name": r.api_name,
+            "environments": set(),
+            "total_requests": 0,
+            "total_errors": 0,
+            "endpoints": {}
+        })
+        entry = api_map[r.api_name]
+        entry["environments"].add(r.environment or "PROD")
+        entry["total_requests"] += r.request_count
+        entry["total_errors"]   += r.error_count
+        ep_key = r.endpoint or "/"
+        if ep_key not in entry["endpoints"]:
+            entry["endpoints"][ep_key] = {
+                "endpoint":       ep_key,
+                "method":         r.method,
+                "flow_steps":     json.loads(r.flow_steps_json or "[]"),
+                "request_count":  r.request_count,
+                "error_count":    r.error_count,
+                "avg_latency_ms": r.avg_latency_ms,
+                "sample_trace":   r.sample_trace_id,
+                "environment":    r.environment,
+                "session_id":     r.session_id,
+            }
+        else:
+            # Merge stats from multiple sessions for same endpoint
+            ep = entry["endpoints"][ep_key]
+            ep["request_count"] += r.request_count
+            ep["error_count"]   += r.error_count
+            if r.avg_latency_ms:
+                ep["avg_latency_ms"] = round((ep["avg_latency_ms"] + r.avg_latency_ms) / 2)
+
+    result = []
+    for api_name, data in api_map.items():
+        result.append({
+            "api_name":       api_name,
+            "environments":   sorted(data["environments"]),
+            "total_requests": data["total_requests"],
+            "total_errors":   data["total_errors"],
+            "error_rate":     round(data["total_errors"] / max(1, data["total_requests"]) * 100, 1),
+            "endpoints":      sorted(data["endpoints"].values(), key=lambda x: -x["request_count"]),
+        })
+    result.sort(key=lambda x: -x["total_requests"])
+    return jsonify({"apis": result, "total_apis": len(result)})
+
 
 @app.route("/api/v1/logs/search", methods=["GET"])
 def api_logs_search():

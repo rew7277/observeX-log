@@ -28,7 +28,83 @@
 <main class="main">
 <section id="sec-dashboard" class="section-panel"><div class="hero"><h1 style="font-size:28px;color:#fff">Dashboard</h1><p style="color:rgba(255,255,255,.82);max-width:850px">Control room for uploaded/API/S3 logs. All insights below are generated from ingested data only — no hardcoded app, dependency, or tag names.</p><div class="top-controls"><select id="env" class="select-styled env-select" style="width:220px">{% for e in environments %}<option>{{e}}</option>{% endfor %}</select><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="copyReport()">Copy RCA</button><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="loadDemo()">Load Demo</button><button class="btn" style="background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="shareCurrentReport()">Share Report</button></div></div><div class="lite-grid"><div class="kpi"><b id="m-total">0</b><span>Lines</span></div><div class="kpi"><b id="m-errors" class="pill-error">0</b><span>Errors</span></div><div class="kpi"><b id="m-warns" class="pill-warn">0</b><span>Warnings</span></div><div class="kpi"><b id="m-latency">0ms</b><span>Avg latency</span></div><div class="kpi"><b id="m-apps">0</b><span>Apps</span></div><div class="kpi"><b id="m-score" class="pill-ok">100</b><span>Health</span></div></div><div class="dashboard-extra-grid"><div class="metric-tile"><small>Error rate</small><b id="m-error-rate">0%</b><span>Failures against total log volume</span></div><div class="metric-tile"><small>Success rate</small><b id="m-success-rate">0%</b><span>Success/OK signals detected</span></div><div class="metric-tile"><small>Throughput</small><b id="m-throughput">0/min</b><span>Log events per active minute</span></div><div class="metric-tile"><small>Trace coverage</small><b id="m-traces">0</b><span>Unique event/trace IDs</span></div><div class="metric-tile"><small>Affected APIs</small><b id="m-apis">0</b><span>Endpoints or flows with signal</span></div><div class="metric-tile"><small>P95 latency</small><b id="m-p95">0ms</b><span>Slow-tail response indicator</span></div><div class="metric-tile"><small>Ingestion sources</small><b id="m-sources">0</b><span>Files/API/S3 sources analysed</span></div><div class="metric-tile"><small>Anomaly signal</small><b id="m-anomaly">Normal</b><span>Baseline and spike detection</span></div></div><div class="dashboard-viz-grid"><div class="viz-panel"><h3>Traffic, errors and warnings</h3><div class="viz-sub">Minute-level trend generated from the active dataset.</div><div id="dash-trend" class="trend-chart"></div></div><div class="viz-panel"><h3>Service health mix</h3><div class="viz-sub">Visual summary of healthy, warning and failing signals.</div><div class="donut-wrap"><div id="health-donut" class="donut"><div class="donut-inner"><div><b id="donut-score">100</b><small style="display:block;color:var(--tx3)">health</small></div></div></div><div id="health-breakdown" class="health-list"></div></div></div></div><div class="signal-grid"><div class="signal-card"><small>MTTR risk</small><b id="m-mttr-risk">Low</b><span>Based on active error clusters</span></div><div class="signal-card"><small>Noise ratio</small><b id="m-noise">0%</b><span>Warnings/info vs actionable events</span></div><div class="signal-card"><small>RCA confidence</small><b id="m-rca-conf">0%</b><span>Trace + failure + context strength</span></div><div class="signal-card"><small>Data freshness</small><b id="m-freshness">—</b><span>Latest ingested log timestamp</span></div></div><div class="insight"><div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap"><div><div style="font-size:11px;color:var(--tx3);font-weight:800;text-transform:uppercase">Root-cause hypothesis</div><h2 id="root-cause" style="margin-top:4px">Upload logs to generate an incident summary.</h2><p id="deploy-recommendation" style="color:var(--tx2);font-size:13px;margin-top:4px">The system will guide you from signal → trace → dependency → decision.</p></div><button class="btn btn-primary" onclick="showSection('logs',event);openTopTrace()">Start guided debugging</button></div></div><div id="action-cards" class="actions-grid"></div><div class="two"><div class="card"><h3>Incident Severity</h3><div id="severity-card" class="node-card">Upload logs to calculate severity.</div></div><div class="card"><h3>Schema Detection & RCA Evidence</h3><div id="schema-card" class="node-card">Waiting for logs.</div><div id="explain-card" style="margin-top:8px;color:var(--tx2);font-size:13px">—</div></div></div><div class="split"><div class="card"><div class="tabs"><button class="tab-btn active" onclick="switchTab('drop-tab',this)">Drag & Drop</button><button class="tab-btn" onclick="switchTab('paste-tab',this)">Paste Logs</button></div><div id="drop-tab" class="tab-panel active"><div id="drop-zone" class="drop-zone" onclick="document.getElementById('fileInput').click()"><div class="drop-icon">⬆</div><h4>Upload logs</h4><p>Drop .log, .txt or .json files. Multiple uploads are accumulated. Limit: 500 MB per request.</p><input id="fileInput" type="file" multiple accept=".log,.txt,.json" style="display:none"></div><div id="upload-status" style="margin-top:10px;font-size:12px;color:var(--tx3)">Choose environment, then upload.</div><div class="progress" style="margin-top:10px"><span id="upload-progress"></span></div><div id="upload-list" class="upload-list"></div></div><div id="paste-tab" class="tab-panel"><textarea id="paste-area" class="input mono" rows="8" placeholder="Paste logs…"></textarea><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="analysePaste()">Analyse</button></div></div><div class="card"><h3>⚡ Findings</h3><div id="findings"><div class="finding-row"><span>No logs analysed yet</span><span class="badge badge-info">READY</span></div></div><h3 style="margin-top:18px">🏷 Smart Tags</h3><div id="smart-tags" style="color:var(--tx3)">—</div></div></div><div class="three"><div class="card"><h3>Top Error Clusters</h3><div id="top-errors" style="color:var(--tx3)">No error clusters yet.</div></div><div class="card"><h3>Guided Debugging</h3><div id="guided-steps"><div class="debug-step" data-step="1">Upload logs to generate a path.</div></div></div><div class="card"><h3>Recommended Next Steps</h3><div id="next-steps" style="color:var(--tx3)">Upload logs to get next steps.</div></div></div></section>
 <section id="sec-logs" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔎 Log Search</div><div class="page-sub">Search uploaded, API, or S3-ingested logs. Click any row for complete multiline log details.</div></div><div class="card"><div class="toolbar"><div><label class="lbl">Env</label><select id="filter-env" class="select-styled env-select"><option value="">All Envs</option>{% for e in environments %}<option>{{e}}</option>{% endfor %}</select></div><div><label class="lbl">File</label><select id="filter-file" class="select-styled"><option value="">All Files</option></select></div><div><label class="lbl">App</label><select id="filter-app" class="select-styled"><option value="">All Apps</option></select></div><div><label class="lbl">Level</label><select id="filter-level" class="select-styled"><option value="">All Levels</option><option>INFO</option><option>DEBUG</option><option>WARN</option><option>ERROR</option><option>SUCCESS</option><option>FAILURE</option></select></div><div><label class="lbl">From Date</label><input id="from-date" type="date" class="input"></div><div><label class="lbl">To Date</label><input id="to-date" type="date" class="input"></div><div><label class="lbl">From Time</label><input id="from-time" type="time" class="input"></div><div><label class="lbl">To Time</label><input id="to-time" type="time" class="input"></div><div><label class="lbl">Search</label><input id="filter-q" class="input" placeholder="trace/event/message"></div><button class="btn btn-primary" onclick="applyClientSearch()">Search</button><button class="btn btn-ghost" onclick="clearLogFilters()">Clear</button></div><div style="margin-top:12px"><span class="chip" onclick="quickLevel('INFO')">Info</span><span class="chip" onclick="quickLevel('DEBUG')">Debug</span><span class="chip" onclick="quickLevel('ERROR')">Error</span><span class="chip" onclick="quickLevel('SUCCESS')">Success</span><span class="chip" onclick="quickLevel('FAILURE')">Failure</span><span class="chip" onclick="quickSearch('trace')">Has trace</span></div><div style="margin-top:12px" class="ql-help"><span class="chip">Query language:</span><span class="chip" onclick="setQueryExample('env=SANDBOX app=demo-checkout-api level=ERROR')">env=SANDBOX app=demo-checkout-api level=ERROR</span><span class="chip" onclick="setQueryExample('trace=1-50953fa0')">trace=1-50953fa0</span><button class="btn btn-ghost btn-sm" onclick="saveCurrentSearch()">Save Search</button><button class="btn btn-ghost btn-sm" onclick="loadSavedSearches()">Saved Searches</button></div><div id="saved-searches-box" style="margin-top:10px;color:var(--tx2)"></div></div><div class="card" style="margin-top:14px"><h3>🚀 Trace Explorer</h3><div class="toolbar" style="margin-top:8px"><input id="trace-q" class="input mono" placeholder="Enter / click trace or event ID"><button class="btn btn-primary" onclick="openTrace()">Open Trace</button><button class="btn btn-ghost" onclick="clearTrace()">Clear Trace</button></div><div id="trace-explain" class="insight" style="display:none"></div><div id="trace-inline"></div></div><div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>All Logs</h3><button class="btn btn-ghost btn-sm" onclick="exportCsv()">Export CSV</button></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Env</th><th>Level</th><th>App</th><th>Trace/Event</th><th>Flow</th><th>Message</th></tr></thead><tbody id="logs-tbody"><tr><td colspan="7" style="text-align:center;color:var(--tx3)">No logs uploaded.</td></tr></tbody></table></div></div></section>
-<section id="sec-flow" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔀 System Map</div><div class="page-sub">Dynamic dependency map, bottleneck view, API health, and trace frequency from the current dataset.</div></div><div class="card"><h3>Request Path</h3><div id="flow-diagram">Upload logs to render flow.</div></div><div class="system-grid" style="margin-top:14px"><div class="card"><h3>API / Flow Health</h3><div id="app-health">—</div></div><div class="card"><h3>Error Timeline</h3><div id="error-timeline" class="mini-bars">—</div></div><div class="card"><h3>Dependencies / External Signals</h3><div id="deps">—</div></div><div class="card"><h3>Advanced Hints</h3><div id="flow-hints">—</div></div><div class="card"><h3>Business Signals</h3><div id="business-signals">Checkout/API/business metrics appear here from parsed payload keys.</div></div><div class="card"><h3>Security Signals</h3><div id="security-signals">PII and secrets are masked before display/export.</div></div></div></section>
+<section id="sec-flow" class="section-panel" style="display:none">
+<div class="page-header"><div class="page-title">🔀 System Map</div><div class="page-sub">API-wise flow mapping built automatically from uploaded logs. Select an API name, then an endpoint to see its full request path, trace and health metrics.</div></div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <div>
+      <label style="font-size:11px;color:var(--tx3);font-weight:800;text-transform:uppercase;display:block;margin-bottom:4px">Environment</label>
+      <select id="sm-env-filter" class="select-styled" style="width:150px" onchange="loadSystemMap()">
+        <option value="">All</option>
+        <option>PROD</option><option>UAT</option><option>DEV</option><option>DR</option>
+      </select>
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--tx3);font-weight:800;text-transform:uppercase;display:block;margin-bottom:4px">API Name</label>
+      <select id="sm-api-select" class="select-styled" style="width:260px" onchange="onSmApiChange()">
+        <option value="">— upload logs to populate —</option>
+      </select>
+    </div>
+    <div>
+      <label style="font-size:11px;color:var(--tx3);font-weight:800;text-transform:uppercase;display:block;margin-bottom:4px">Endpoint / URI</label>
+      <select id="sm-endpoint-select" class="select-styled" style="width:320px" onchange="onSmEndpointChange()">
+        <option value="">— select API first —</option>
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="loadSystemMap()">↻ Refresh</button>
+  </div>
+</div>
+
+<div id="sm-kpi-row" class="lite-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:14px;display:none">
+  <div class="kpi"><b id="sm-kpi-reqs">0</b><span>Requests</span></div>
+  <div class="kpi"><b id="sm-kpi-errs" class="pill-error">0</b><span>Errors</span></div>
+  <div class="kpi"><b id="sm-kpi-erate">0%</b><span>Error Rate</span></div>
+  <div class="kpi"><b id="sm-kpi-lat">0ms</b><span>Avg Latency</span></div>
+  <div class="kpi"><b id="sm-kpi-trace">—</b><span>Sample Trace</span></div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <h3>Request Path</h3>
+  <div id="flow-diagram" style="padding:10px 0">Upload logs to render flow.</div>
+  <div id="sm-trace-path" style="margin-top:10px;font-size:12px;color:var(--tx3)"></div>
+</div>
+
+<div class="system-grid" style="margin-top:14px">
+  <div class="card">
+    <h3>All Endpoints for Selected API</h3>
+    <div id="sm-endpoint-list">Select an API to see its endpoints.</div>
+  </div>
+  <div class="card">
+    <h3>API / Flow Health</h3>
+    <div id="app-health">—</div>
+  </div>
+  <div class="card">
+    <h3>Error Timeline</h3>
+    <div id="error-timeline" class="mini-bars">—</div>
+  </div>
+  <div class="card">
+    <h3>All APIs Overview</h3>
+    <div id="sm-api-overview">Upload logs to see API overview.</div>
+  </div>
+  <div class="card">
+    <h3>Dependencies / External Signals</h3>
+    <div id="deps">—</div>
+  </div>
+  <div class="card">
+    <h3>Advanced Hints</h3>
+    <div id="flow-hints">—</div>
+  </div>
+  <div class="card">
+    <h3>Business Signals</h3>
+    <div id="business-signals">Checkout/API/business metrics appear here from parsed payload keys.</div>
+  </div>
+  <div class="card">
+    <h3>Security Signals</h3>
+    <div id="security-signals">PII and secrets are masked before display/export.</div>
+  </div>
+</div>
+</section>
 
 <section id="sec-onboarding" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🧭 Onboarding Wizard</div><div class="page-sub">Guide customers from first login to first RCA.</div></div><div class="three"><div class="card"><h3>1. Try Demo Mode</h3><p style="color:var(--tx2)">Load a sample incident to understand the product without real logs.</p><button class="btn btn-primary" onclick="loadDemo();showSection('dashboard',event)">Load demo incident</button></div><div class="card"><h3>2. Ingest Logs</h3><p style="color:var(--tx2)">Upload a file, paste logs, connect S3, or send logs to API.</p><button class="btn btn-ghost" onclick="showSection('api',event)">View API setup</button></div><div class="card"><h3>3. Share RCA</h3><p style="color:var(--tx2)">Generate a masked RCA report with expiring link.</p><button class="btn btn-ghost" onclick="shareCurrentReport()">Create safe link</button></div></div><div class="card" style="margin-top:14px"><h3>Progress</h3><div id="onboarding-steps">Loading...</div></div></section>
 <section id="sec-health" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">📡 Data Source Health</div><div class="page-sub">See if file upload, API ingestion, S3 and connectors are active, delayed, or failing.</div></div><div class="card"><div id="source-health-cards" class="actions-grid">Loading...</div></div><div class="card" style="margin-top:14px"><h3>Queue Jobs</h3><div class="table-wrap"><table><thead><tr><th>ID</th><th>Source</th><th>File</th><th>Status</th><th>Bytes</th><th>Lines</th><th>Finished</th></tr></thead><tbody id="jobs-body"><tr><td colspan="7">Loading...</td></tr></tbody></table></div></div></section>
@@ -63,7 +139,21 @@ Check jobs inside Data Source Health or GET /ingestion/jobs.</pre><h3>cURL</h3><
 Failure: 400 logs field required · 401 invalid API key · 413 max upload exceeded
 Railway volume: set OBSERVEX_DATA_DIR=/data and mount a volume at /data.</pre></div></section>
 <section id="sec-alerts" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔔 Alerts</div><div class="page-sub">Create rules for error spikes, latency, or application failures.</div></div><div class="card"><div class="toolbar"><input id="alert-name" class="input" placeholder="Rule name"><select id="alert-env" class="select-styled env-select">{% for e in environments %}<option>{{e}}</option>{% endfor %}</select><select id="alert-cond" class="select-styled"><option value="errors">Errors greater than</option><option value="latency">Latency greater than</option><option value="health">Health below</option></select><input id="alert-threshold" type="number" class="input" placeholder="Threshold"><button class="btn btn-primary" onclick="createAlert()">Create</button></div></div></section>
-<section id="sec-history" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">📋 Upload History</div><div class="page-sub">Previous uploaded/API-ingested summaries. Deleting here removes the saved summary and the masked raw log stored in the Railway volume. Dashboard file chips remove active in-memory data immediately.</div></div><div class="card"><button class="btn btn-danger btn-sm" onclick="clearServerHistory()">Clear Saved History</button><div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Env</th><th>File</th><th>Lines</th><th>Errors</th><th>Warns</th><th>Apps</th><th>Date</th><th></th></tr></thead><tbody id="history-body"><tr><td colspan="8">Loading...</td></tr></tbody></table></div></div></section>
+<section id="sec-history" class="section-panel" style="display:none">
+<div class="page-header"><div class="page-title">📋 Upload History</div><div class="page-sub">Sessions are stored in Postgres and persist across sign-out. Use <b>Reload</b> to restore a session's log rows to the active dashboard. <b>Delete</b> removes the session, log rows and flow-map data permanently.</div></div>
+<div class="card">
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <button class="btn btn-danger btn-sm" onclick="clearServerHistory()">Delete All History</button>
+    <span id="history-status" style="font-size:12px;color:var(--tx3)"></span>
+  </div>
+  <div class="table-wrap" style="margin-top:14px">
+    <table>
+      <thead><tr><th>Env</th><th>File</th><th>Lines</th><th>Errors</th><th>Warns</th><th>Avg Lat</th><th>Apps</th><th>Date</th><th></th></tr></thead>
+      <tbody id="history-body"><tr><td colspan="9">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+</section>
 <section id="sec-connectors" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🔌 Source Connectors</div><div class="page-sub">Prepare direct ingestion from S3, CloudWatch, MuleSoft, Kafka, or webhooks. Store only non-secret config here; keep credentials in Railway variables or a vault.</div></div><div class="card"><div class="toolbar"><select id="connector-kind" class="select-styled"><option>s3</option><option>cloudwatch</option><option>mulesoft</option><option>kafka</option><option>webhook</option></select><input id="connector-name" class="input" placeholder="Connector name"><input id="connector-config" class="input" placeholder='JSON config e.g. {"bucket":"logs-prod"}'><button class="btn btn-primary" onclick="createConnector()">Add Connector</button></div><div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Kind</th><th>Name</th><th>Config</th><th>Status</th><th></th></tr></thead><tbody id="connectors-body"><tr><td colspan="5">Loading...</td></tr></tbody></table></div></div><div class="card" style="margin-top:14px"><h3>Suggested production connector flow</h3><p style="color:var(--tx2)">Source → signed upload/API ingestion → masking → Railway volume/object store → metadata index → alerting/RCA.</p></div></section>
 
 <section id="sec-marketplace" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🛒 Integration Marketplace</div><div class="page-sub">Connect ObserveX with the tools production teams already use.</div></div><div id="marketplace-grid" class="market-grid"></div></section>
@@ -76,7 +166,7 @@ Railway volume: set OBSERVEX_DATA_DIR=/data and mount a volume at /data.</pre></
 <script>
 let _allRows=[],_visibleRows=[],_lastResult=null,_sessions=[],_environments={{ environments|tojson }};
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const badge=l=>l==='ERROR'||l==='FAILURE'?'badge-error':l==='WARN'?'badge-warn':l==='SUCCESS'?'badge-ok':'badge-info';
-function toggleSidebar(){let s=document.getElementById('shell');s.classList.toggle('collapsed');localStorage.setItem('observexSidebarCollapsed',s.classList.contains('collapsed')?'1':'0')}function showSection(name,ev){document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');document.getElementById('sec-'+name).style.display='block';document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));if(ev?.currentTarget)ev.currentTarget.classList.add('active');if(name==='history')loadHistory();if(name==='flow')renderFlow();if(name==='compliance')loadCompliance();if(name==='connectors')loadConnectors();if(name==='api')loadApiDocs();if(name==='onboarding')loadOnboarding();if(name==='health')loadSourceHealth();if(name==='performance')loadPerformance();if(name==='customdash')loadWidgets();if(name==='incidents')loadIncidents();if(name==='metrics')loadLogMetrics();if(name==='marketplace')loadMarketplace();if(name==='billing')loadBilling();if(name==='settings'){loadInvites();loadMembers();}}function switchTab(id,btn){document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.parentElement.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
+function toggleSidebar(){let s=document.getElementById('shell');s.classList.toggle('collapsed');localStorage.setItem('observexSidebarCollapsed',s.classList.contains('collapsed')?'1':'0')}function showSection(name,ev){document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');document.getElementById('sec-'+name).style.display='block';document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));if(ev?.currentTarget)ev.currentTarget.classList.add('active');if(name==='history')loadHistory();if(name==='flow'){renderFlow();loadSystemMap();}if(name==='compliance')loadCompliance();if(name==='connectors')loadConnectors();if(name==='api')loadApiDocs();if(name==='onboarding')loadOnboarding();if(name==='health')loadSourceHealth();if(name==='performance')loadPerformance();if(name==='customdash')loadWidgets();if(name==='incidents')loadIncidents();if(name==='metrics')loadLogMetrics();if(name==='marketplace')loadMarketplace();if(name==='billing')loadBilling();if(name==='settings'){loadInvites();loadMembers();}}function switchTab(id,btn){document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.parentElement.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
 async function safeJson(res){let d=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(d.error||'Request failed');return d}
 const dz=document.getElementById('drop-zone');['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>uploadFiles([...e.dataTransfer.files]));document.getElementById('fileInput').addEventListener('change',e=>uploadFiles([...e.target.files]));
 async function uploadFiles(files){if(!files.length)return;let total=files.reduce((a,f)=>a+f.size,0),done=0;document.getElementById('upload-status').textContent=`Uploading ${files.length} file(s)…`;for(const file of files){const fd=new FormData();fd.append('env',document.getElementById('env').value);fd.append('logfile',file);try{let d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));addSession(d,file.name,file.size)}catch(e){alert(file.name+': '+e.message)}done+=file.size;document.getElementById('upload-progress').style.width=Math.round(done/total*100)+'%'}document.getElementById('upload-status').textContent='Upload complete. Active dataset contains '+_allRows.length+' parsed log record(s).'}
@@ -117,9 +207,141 @@ function applyClientSearch(){let q=document.getElementById('filter-q').value.toL
 function quickSearch(q){document.getElementById('filter-q').value=q;showSection('logs');applyClientSearch()}function quickLevel(l){document.getElementById('filter-level').value=l;applyClientSearch()}function clearLogFilters(){['filter-q','from-date','to-date','from-time','to-time'].forEach(id=>document.getElementById(id).value='');['filter-env','filter-file','filter-app','filter-level'].forEach(id=>document.getElementById(id).value='');renderRows(_allRows)}
 let _currentLogText='';function openLogModal(idx){let r=_allRows[idx];if(!r)return;_currentLogText=r.message||'';document.getElementById('log-detail').innerHTML=`<div class="log-detail-grid">${['time','env','level','app','trace','event','flow','status','latency','uploadName','line_no','is_multiline'].map(k=>`<div class="detail-box"><small>${k}</small><b>${esc(r[k]||'—')}</b></div>`).join('')}</div><h3>Message</h3><pre class="detail-message mono">${esc(r.message)}</pre>`;document.getElementById('log-modal').classList.add('active')}function closeLogModal(){document.getElementById('log-modal').classList.remove('active')}function copyCurrentLog(){navigator.clipboard.writeText(_currentLogText||'');alert('Complete log copied')}
 function openTopTrace(){if(_lastResult?.hot_traces?.[0]){document.getElementById('trace-q').value=_lastResult.hot_traces[0].trace;openTrace()}}function clearTrace(){document.getElementById('trace-q').value='';document.getElementById('trace-explain').style.display='none';document.getElementById('trace-inline').innerHTML=''}function openTrace(){let id=document.getElementById('trace-q').value.trim();if(!id)return alert('Enter trace/event ID');let rows=_allRows.filter(r=>String(r.trace).includes(id)||String(r.event).includes(id)||String(r.message).includes(id));let errs=rows.filter(r=>r.level==='ERROR'||r.level==='FAILURE').length;document.getElementById('trace-explain').style.display='block';document.getElementById('trace-explain').innerHTML=`<b>Trace explanation:</b> ${errs?`This trace contains ${errs} failure signal(s). Start at the first ERROR/FAILURE and read previous INFO/DEBUG lines.`:'No failure in this trace. Use it as timing/context evidence.'}`;document.getElementById('trace-inline').innerHTML=rows.map(r=>`<div class="trace-row" onclick="openLogModal(${_allRows.indexOf(r)})" style="cursor:pointer"><span>${esc(r.time)}</span><span class="badge ${badge(r.level)}">${r.level}</span><span>${esc(r.app)}</span><span class="mono">${esc(r.message).slice(0,520)}</span></div>`).join('')||'No trace found.';showSection('logs')}
-function renderFlow(){let d=_lastResult||{},apps=d.apps||[],deps=d.dependencies||[],nodes=['Client',...apps.slice(0,6),...deps.slice(0,5)];document.getElementById('flow-diagram').innerHTML=nodes.length>1?nodes.map((n,i)=>`<span class="flow-node">${esc(n)}</span>${i<nodes.length-1?'<span class="flow-arrow">→</span>':''}`).join(''):'Upload logs to render flow.';document.getElementById('deps').innerHTML=deps.map(x=>`<span class="chip">${esc(x)}</span>`).join('')||'—';document.getElementById('flow-hints').innerHTML=(d.suggestions||[]).map(x=>`• ${esc(x)}`).join('<br>')||'—';document.getElementById('app-health').innerHTML=(d.app_health||[]).map(a=>`<div class="node-card"><b>${esc(a.app)}</b><div style="color:var(--tx2);font-size:12px">${a.lines} lines · ${a.errors} errors · ${a.warns} warnings · avg ${a.avg_latency}ms</div></div>`).join('')||'—';let max=Math.max(1,...(d.timeline_buckets||[]).map(b=>b.total));document.getElementById('error-timeline').innerHTML=(d.timeline_buckets||[]).map(b=>`<div title="${esc(b.time)} · ${b.errors} errors" class="mini-bar ${b.errors?'err':''}" style="height:${Math.max(8,Math.round((b.total/max)*76))}px"></div>`).join('')||'—';let pay=_allRows.filter(r=>/checkout|amount|upi|bbps|success/i.test(r.message||''));document.getElementById('business-signals').innerHTML=`<div class="node-card"><b>${pay.length}</b><div style="color:var(--tx2);font-size:12px">business/checkout related log records detected</div></div><div class="node-card"><b>${_allRows.filter(r=>/status\"?\s*[:=]\s*\"?Success/i.test(r.message||'')).length}</b><div style="color:var(--tx2);font-size:12px">success payloads detected</div></div>`;document.getElementById('security-signals').innerHTML=`<div class="node-card"><b>Enabled</b><div style="color:var(--tx2);font-size:12px">JWT, tokens, Aadhaar, PAN, mobile, email, names and loan/checkout identifiers masked.</div></div>`;document.getElementById('deploy-card').textContent=d.deploy_summary?.recommendation||'Upload logs to produce a release decision.'}
+// ── System Map state ─────────────────────────────────────────────────────────
+let _smData=null;
+function renderFlow(){
+  // Keep in-memory flow rendering for current session (used by recomputeAggregate)
+  let d=_lastResult||{},deps=d.dependencies||[];
+  document.getElementById('deps').innerHTML=deps.map(x=>`<span class="chip">${esc(x)}</span>`).join('')||'—';
+  document.getElementById('flow-hints').innerHTML=(d.suggestions||[]).map(x=>`• ${esc(x)}`).join('<br>')||'—';
+  document.getElementById('app-health').innerHTML=(d.app_health||[]).map(a=>`<div class="node-card"><b>${esc(a.app)}</b><div style="color:var(--tx2);font-size:12px">${a.lines} lines · ${a.errors} errors · ${a.warns} warnings · avg ${a.avg_latency}ms</div></div>`).join('')||'—';
+  let max=Math.max(1,...(d.timeline_buckets||[]).map(b=>b.total));
+  document.getElementById('error-timeline').innerHTML=(d.timeline_buckets||[]).map(b=>`<div title="${esc(b.time)} · ${b.errors} errors" class="mini-bar ${b.errors?'err':''}" style="height:${Math.max(8,Math.round((b.total/max)*76))}px"></div>`).join('')||'—';
+  let pay=_allRows.filter(r=>/checkout|amount|upi|bbps|success/i.test(r.message||''));
+  document.getElementById('business-signals').innerHTML=`<div class="node-card"><b>${pay.length}</b><div style="color:var(--tx2);font-size:12px">business/checkout related log records detected</div></div>`;
+  document.getElementById('security-signals').innerHTML=`<div class="node-card"><b>Enabled</b><div style="color:var(--tx2);font-size:12px">JWT, tokens, Aadhaar, PAN, mobile, email, names and loan/checkout identifiers masked.</div></div>`;
+  if(document.getElementById('deploy-card')) document.getElementById('deploy-card').textContent=d.deploy_summary?.recommendation||'Upload logs to produce a release decision.';
+  // Also refresh system map from Postgres
+  loadSystemMap();
+}
+
+async function loadSystemMap(){
+  let env=document.getElementById('sm-env-filter')?.value||'';
+  let url='/api/v1/system-map'+(env?'?env='+encodeURIComponent(env):'');
+  let data=await safeJson(await fetch(url)).catch(()=>null);
+  if(!data||!data.apis){
+    document.getElementById('flow-diagram').innerHTML='<span style="color:var(--tx3)">Upload logs to render the system map.</span>';
+    return;
+  }
+  _smData=data;
+  // Populate API dropdown
+  let apiSel=document.getElementById('sm-api-select');
+  let prevApi=apiSel.value;
+  apiSel.innerHTML='<option value="">— Select API —</option>'+data.apis.map(a=>`<option value="${esc(a.api_name)}">${esc(a.api_name)} (${a.total_requests} reqs)</option>`).join('');
+  if(prevApi) apiSel.value=prevApi;
+
+  // API overview table
+  document.getElementById('sm-api-overview').innerHTML=`<div class="table-wrap"><table><thead><tr><th>API</th><th>Envs</th><th>Requests</th><th>Errors</th><th>Error %</th></tr></thead><tbody>${
+    data.apis.map(a=>`<tr onclick="document.getElementById('sm-api-select').value='${a.api_name}';onSmApiChange()" style="cursor:pointer"><td><b>${esc(a.api_name)}</b></td><td>${a.environments.join(', ')}</td><td>${a.total_requests}</td><td class="${a.total_errors?'pill-error':''}">${a.total_errors}</td><td>${a.error_rate}%</td></tr>`).join('')
+  }</tbody></table></div>`;
+
+  if(prevApi) onSmApiChange();
+}
+
+function onSmApiChange(){
+  let apiName=document.getElementById('sm-api-select').value;
+  if(!apiName||!_smData){
+    document.getElementById('sm-endpoint-select').innerHTML='<option value="">— select API first —</option>';
+    document.getElementById('flow-diagram').innerHTML='Select an API to see its flow.';
+    document.getElementById('sm-kpi-row').style.display='none';
+    document.getElementById('sm-endpoint-list').innerHTML='Select an API to see its endpoints.';
+    return;
+  }
+  let api=_smData.apis.find(a=>a.api_name===apiName);
+  if(!api) return;
+  // Populate endpoint dropdown
+  let epSel=document.getElementById('sm-endpoint-select');
+  epSel.innerHTML='<option value="">— All endpoints —</option>'+(api.endpoints||[]).map(e=>`<option value="${esc(e.endpoint||'/')}">${esc(e.method||'?')} ${esc(e.endpoint||'/')} (${e.request_count} reqs, ${e.error_count} errs)</option>`).join('');
+  // Endpoint list table
+  document.getElementById('sm-endpoint-list').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Method</th><th>Endpoint</th><th>Reqs</th><th>Errors</th><th>Avg Lat</th><th>Env</th></tr></thead><tbody>${
+    (api.endpoints||[]).map(e=>`<tr onclick="document.getElementById('sm-endpoint-select').value='${esc(e.endpoint||'/')}';onSmEndpointChange()" style="cursor:pointer"><td><span class="status-pill">${esc(e.method||'?')}</span></td><td class="mono">${esc(e.endpoint||'/')}</td><td>${e.request_count}</td><td class="${e.error_count?'pill-error':''}">${e.error_count}</td><td>${e.avg_latency_ms}ms</td><td>${esc(e.environment||'')}</td></tr>`).join('')
+  }</tbody></table></div>`;
+  // Show aggregate KPIs for this API
+  document.getElementById('sm-kpi-row').style.display='';
+  document.getElementById('sm-kpi-reqs').textContent=api.total_requests;
+  document.getElementById('sm-kpi-errs').textContent=api.total_errors;
+  document.getElementById('sm-kpi-erate').textContent=api.error_rate+'%';
+  document.getElementById('sm-kpi-lat').textContent='—';
+  document.getElementById('sm-kpi-trace').textContent='—';
+  // Show first endpoint flow by default
+  if(api.endpoints&&api.endpoints.length) renderFlowDiagram(api.endpoints[0]);
+  else document.getElementById('flow-diagram').innerHTML='No endpoints detected for this API.';
+}
+
+function onSmEndpointChange(){
+  let apiName=document.getElementById('sm-api-select').value;
+  let epVal=document.getElementById('sm-endpoint-select').value;
+  if(!apiName||!_smData) return;
+  let api=_smData.apis.find(a=>a.api_name===apiName);
+  if(!api) return;
+  let ep=epVal?api.endpoints.find(e=>(e.endpoint||'/')==epVal):api.endpoints[0];
+  if(!ep) return;
+  renderFlowDiagram(ep);
+}
+
+function renderFlowDiagram(ep){
+  let steps=ep.flow_steps||['Client','→','Response'];
+  document.getElementById('flow-diagram').innerHTML=steps.map((s,i)=>`<span class="flow-node">${esc(s)}</span>${i<steps.length-1?'<span class="flow-arrow">→</span>':''}`).join('');
+  document.getElementById('sm-trace-path').innerHTML=`<b>Trace example:</b> <code class="mono">${esc(ep.sample_trace||'—')}</code>`;
+  document.getElementById('sm-kpi-lat').textContent=(ep.avg_latency_ms||0)+'ms';
+  if(ep.sample_trace) document.getElementById('sm-kpi-trace').textContent=ep.sample_trace.slice(0,24)+(ep.sample_trace.length>24?'…':'');
+}
 function generateReport(){let d=_lastResult;if(!d)return;document.getElementById('rca-report').textContent=`ObserveX RCA\nFiles: ${_sessions.map(s=>s.name).join(', ')||'N/A'}\nRoot cause: ${d.root_cause}\nApps: ${(d.apps||[]).join(', ')||'N/A'}\nLines: ${d.total}\nErrors: ${d.errors}\nWarnings: ${d.warns}\nAvg latency: ${d.latency}ms\nHealth: ${Math.round(d.health_score)}/100\nDecision: ${d.deploy_summary?.recommendation||''}\nNext steps:\n- ${(d.suggestions||[]).join('\n- ')}`}function copyReport(){generateReport();navigator.clipboard.writeText(document.getElementById('rca-report')?.textContent||'');alert('Report copied')}async function exportCsv(){let res=await fetch('/export/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:_visibleRows||[]})});let blob=await res.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='observex-log-export.csv';a.click()}function copyKey(){navigator.clipboard.writeText(document.getElementById('api-key-display').textContent.trim());alert('Dummy API header copied')}async function loadApiDocs(){let d=await safeJson(await fetch('/api/docs'));document.getElementById('api-docs-json').textContent=JSON.stringify(d,null,2)}
-async function createAlert(){let name=document.getElementById('alert-env').value+' - '+(document.getElementById('alert-name').value||'Alert'),condition=document.getElementById('alert-cond').value,threshold=Number(document.getElementById('alert-threshold').value||0);await safeJson(await fetch('/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,condition,threshold})}));alert('Alert created')}async function loadHistory(){let rows=await safeJson(await fetch('/history'));document.getElementById('history-body').innerHTML=rows.map(r=>`<tr><td>${esc(r.env)}</td><td>${esc(r.file)}</td><td>${r.total}</td><td>${r.errors}</td><td>${r.warns}</td><td>${esc(r.apps)}</td><td>${esc(r.at)}</td><td><span class="danger-link" onclick="deleteHistory(${r.id})">Delete</span></td></tr>`).join('')||'<tr><td colspan="8">No saved history yet.</td></tr>'}async function deleteHistory(id){await safeJson(await fetch('/history?id='+id,{method:'DELETE'}));loadHistory()}async function clearServerHistory(){if(confirm('Clear all saved upload history?')){await safeJson(await fetch('/history',{method:'DELETE'}));loadHistory()}}
+async function createAlert(){let name=document.getElementById('alert-env').value+' - '+(document.getElementById('alert-name').value||'Alert'),condition=document.getElementById('alert-cond').value,threshold=Number(document.getElementById('alert-threshold').value||0);await safeJson(await fetch('/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,condition,threshold})}));alert('Alert created')}async function loadHistory(){
+  let rows=await safeJson(await fetch('/history'));
+  if(!Array.isArray(rows)){document.getElementById('history-body').innerHTML='<tr><td colspan="9">Error loading history.</td></tr>';return;}
+  document.getElementById('history-body').innerHTML=rows.map(r=>`<tr>
+    <td>${esc(r.env)}</td>
+    <td>${esc(r.file)}</td>
+    <td>${r.total}</td>
+    <td class="${r.errors?'pill-error':''}">${r.errors}</td>
+    <td>${r.warns}</td>
+    <td>${r.latency}ms</td>
+    <td style="font-size:11px">${esc(r.apps)}</td>
+    <td style="font-size:11px">${esc(r.at)}</td>
+    <td style="white-space:nowrap">
+      <span class="danger-link" style="margin-right:10px" onclick="reloadSession(${r.id},'${esc(r.file)}')" title="Reload log rows from Postgres into active dashboard">↩ Reload</span>
+      <span class="danger-link" onclick="deleteHistory(${r.id})">🗑 Delete</span>
+    </td>
+  </tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--tx3)">No saved history yet. Upload a log file to create a session.</td></tr>';
+  document.getElementById('history-status').textContent=rows.length?`${rows.length} session(s) stored in Postgres`:'';
+}
+async function reloadSession(sessionId,filename){
+  let statusEl=document.getElementById('history-status');
+  statusEl.textContent='⏳ Reloading session…';
+  try{
+    let r=await fetch('/api/v1/sessions/'+sessionId+'/rows');
+    if(!r.ok){statusEl.textContent='❌ Reload failed: '+r.status;return;}
+    let d=await r.json();
+    if(d.error){statusEl.textContent='❌ '+d.error;return;}
+    addSession(d, filename||('session-'+sessionId), 0);
+    statusEl.textContent='✅ Session reloaded successfully';
+    showSection('dashboard');
+  }catch(e){statusEl.textContent='❌ Network error: '+e.message;}
+}
+async function deleteHistory(id){
+  if(!confirm('Delete this session and its log rows from Postgres?')) return;
+  await safeJson(await fetch('/history?id='+id,{method:'DELETE'}));
+  loadHistory();
+  loadSystemMap();
+}
+async function clearServerHistory(){
+  if(confirm('Delete ALL saved sessions, log rows and system map data from Postgres?')){
+    await safeJson(await fetch('/history',{method:'DELETE'}));
+    loadHistory();
+    loadSystemMap();
+  }
+}
 
 async function loadCompliance(){let d=await safeJson(await fetch('/settings/saas'));document.getElementById('workspace-name').value=d.workspace?.name||'';document.getElementById('workspace-plan').value=d.workspace?.plan||'starter';document.getElementById('retention-days').value=d.retention?.days||30;document.getElementById('masked-only').checked=!!d.retention?.masked_only;document.getElementById('encrypted-raw').checked=!!d.retention?.encrypted_raw_logs;document.getElementById('workspace-info').innerHTML=`<b>${esc(d.workspace?.name||'Workspace')}</b><div style="color:var(--tx2);font-size:12px">Role: ${esc(d.role||'Admin')} · Plan: ${esc(d.workspace?.plan||'starter')}</div><div style="color:var(--tx3);font-size:12px;margin-top:6px">${esc(d.recommendation||'')}</div>`;document.getElementById('retention-info').innerHTML=`<b>${d.retention?.days||30} days</b><div style="color:var(--tx2);font-size:12px">Masked only: ${d.retention?.masked_only?'Yes':'No'} · Encrypted raw logs: ${d.retention?.encrypted_raw_logs?'Yes':'No'}</div>`;document.getElementById('usage-info').innerHTML=`<div class="node-card"><b>${d.storage?.mb||0} MB</b><div style="color:var(--tx2);font-size:12px">${d.storage?.stored_files||0} stored files · ${d.storage?.sessions||0} sessions · backend: ${esc(d.storage?.backend||'railway-volume')}</div><div style="color:var(--tx3);font-size:12px">Mongo configured: ${d.storage?.mongo_configured?'Yes':'No'} · Max upload: ${d.storage?.max_upload_mb||500} MB</div></div>`;loadAudit();loadDestinations()}
 async function saveSaasSettings(){let body={workspace_name:document.getElementById('workspace-name').value,plan:document.getElementById('workspace-plan').value,retention_days:Number(document.getElementById('retention-days').value||30),masked_only:document.getElementById('masked-only').checked,encrypted_raw_logs:document.getElementById('encrypted-raw').checked};await safeJson(await fetch('/settings/saas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));loadCompliance();alert('SaaS settings saved')}
