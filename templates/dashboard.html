@@ -32,6 +32,23 @@
 .enterprise-strip{display:flex;gap:10px;overflow:auto;padding:10px;background:linear-gradient(135deg,rgba(90,94,247,.12),rgba(244,63,94,.08));border:1px solid var(--bd2);border-radius:16px;margin:12px 0}.enterprise-alert{min-width:260px;background:var(--sf2);border:1px solid var(--bd);border-radius:14px;padding:10px}.enterprise-alert b{display:block}.enterprise-alert.critical{border-color:rgba(244,63,94,.6)}.enterprise-alert.warn{border-color:rgba(245,158,11,.55)}.enterprise-alert.ok{border-color:rgba(34,197,94,.45)}.global-search-box{position:relative;margin:12px 0}.global-search-results{position:absolute;left:0;right:0;top:48px;z-index:30;background:var(--bg2);border:1px solid var(--bd2);border-radius:16px;box-shadow:var(--shadow);max-height:360px;overflow:auto;display:none}.global-result{padding:10px;border-bottom:1px solid var(--bd);cursor:pointer}.global-result:hover{background:var(--sf2)}.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.step-card{background:var(--sf2);border:1px solid var(--bd);border-radius:12px;padding:8px;margin:6px 0;font-size:12px}.light-mode{--bg:#f8fafc;--bg2:#ffffff;--sf:#ffffff;--sf2:#f1f5f9;--sf3:#e2e8f0;--tx:#0f172a;--tx2:#334155;--tx3:#64748b;--bd:rgba(15,23,42,.12);--bd2:rgba(79,70,229,.22)}
 .rca-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.rca-mini{background:var(--sf2);border:1px solid var(--bd);border-radius:12px;padding:9px}.rca-mini small,.sla-row small{display:block;color:var(--tx3);font-size:10px;text-transform:uppercase;font-weight:800}.rca-mini b{font-size:16px}.evidence-box{max-height:180px;overflow:auto;background:rgba(0,0,0,.14);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-top:8px}.sla-bars{display:grid;gap:8px;margin-top:10px}.sla-row{display:grid;grid-template-columns:105px 1fr 70px;gap:8px;align-items:center}.bar{height:8px;background:var(--sf3);border-radius:99px;overflow:hidden}.bar span{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#f59e0b,#f43f5e)}.report-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}.tag-group{margin:10px 0}.tag-group-title{font-size:11px;color:var(--tx3);font-weight:900;text-transform:uppercase;margin-bottom:6px}.chip.actionable{cursor:pointer}.chip.actionable:hover{border-color:rgba(139,92,246,.7);transform:translateY(-1px)}.summary-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:12px}.summary-item{background:var(--sf2);border:1px solid var(--bd);border-radius:14px;padding:10px}.summary-item b{display:block;font-size:18px}.drillable{cursor:pointer}.drillable:hover{border-color:rgba(139,92,246,.75)}@media(max-width:900px){.summary-strip,.rca-summary-grid,.report-preview{grid-template-columns:1fr}.sla-row{grid-template-columns:90px 1fr 55px}}
 
+
+/* V34 clarity/noise reduction */
+.noise-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 12px}.compact-section{border:1px solid var(--bd);border-radius:16px;background:var(--sf2);margin:10px 0;overflow:hidden}.compact-section>summary{cursor:pointer;list-style:none;padding:12px 14px;font-weight:900;color:#fff;display:flex;justify-content:space-between;align-items:center}.compact-section>summary:after{content:'⌄';color:var(--tx3)}.compact-section[open]>summary:after{content:'⌃'}.compact-body{padding:0 14px 14px}.mask-group-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.mask-row{display:grid;grid-template-columns:24px 1fr 150px 86px;gap:10px;align-items:center;border-bottom:1px solid var(--bd);padding:9px 0}.mask-row .field-name{font-weight:800}.mask-row small{display:block;color:var(--tx3);font-size:10px;margin-top:2px}.clean-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}.clean-card{background:var(--sf2);border:1px solid var(--bd);border-radius:16px;padding:12px;min-width:0}.clean-card small{display:block;color:var(--tx3);font-size:10px;font-weight:900;text-transform:uppercase}.clean-card b{display:block;margin-top:5px;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.insight-list{display:grid;gap:8px}.insight-row{display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:center;border:1px solid var(--bd);background:rgba(255,255,255,.025);border-radius:13px;padding:10px}.insight-row .label{font-size:11px;color:var(--tx3);font-weight:900;text-transform:uppercase}.tag-show-more{font-size:11px;color:var(--tx3);margin-left:5px}.registry-toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap}.registry-name{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.registry-sub{font-size:11px;color:var(--tx3);margin-top:3px}.registry-tags .chip:nth-child(n+4){display:none}.raw-preview{max-height:180px;overflow:auto;white-space:pre-wrap;font-size:11px;color:var(--tx2);background:rgba(0,0,0,.14);border:1px solid var(--bd);border-radius:12px;padding:10px}.muted-note{color:var(--tx3);font-size:12px}.btn-xs{padding:5px 8px;font-size:11px}@media(max-width:1000px){.mask-group-grid,.clean-summary-grid{grid-template-columns:1fr}.mask-row{grid-template-columns:24px 1fr}.mask-row select,.mask-row button{grid-column:2}.insight-row{grid-template-columns:1fr}}
+
+
+.clean-flow-wrap{padding:18px;min-height:260px}
+.clean-flow-title{font-weight:900;color:var(--tx);margin-bottom:18px;font-size:14px}
+.clean-flow-lane{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.clean-flow-step{min-width:150px;max-width:220px;padding:14px 16px;border-radius:18px;border:1px solid rgba(167,139,250,.30);background:rgba(31,29,55,.72);box-shadow:0 10px 24px rgba(0,0,0,.18)}
+.clean-flow-step b{display:block;font-size:12px;color:#f8fafc;white-space:normal;word-break:break-word;line-height:1.3}
+.clean-flow-step span{display:block;margin-top:7px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3)}
+.clean-flow-step.api{border-color:rgba(90,94,247,.55);background:rgba(90,94,247,.18)}
+.clean-flow-step.external{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12)}
+.clean-flow-step.response,.clean-flow-step.client{border-color:rgba(16,185,129,.42);background:rgba(16,185,129,.10)}
+.clean-flow-index{width:22px;height:22px;border-radius:999px;background:rgba(167,139,250,.25);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;margin-bottom:9px;color:#fff}
+.clean-flow-arrow{color:rgba(167,139,250,.72);font-size:20px;font-weight:900}
+.clean-flow-note{margin-top:18px;color:var(--tx3);font-size:12px}
 </style>
 <div id="shell" class="app-shell"><aside class="sidebar"><button class="btn btn-ghost sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar / icon mode">☰</button><div class="brand"><div class="brand-logo" style="font-weight:900">OX</div><div><div class="brand-name">ObserveX</div><div class="brand-sub">Log Intelligence</div></div></div><div class="nav-section">Operate</div><a class="nav-link active" data-title="Dashboard" onclick="showSection('dashboard',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="15" width="7" height="6"/></svg></span><span class="nav-text">Dashboard</span></a><a class="nav-link" data-title="Log Search" onclick="showSection('logs',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span><span class="nav-text">Log Search</span></a><a class="nav-link" data-title="System Map" onclick="showSection('flow',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.7 10.8 15.4 7.2M8.7 13.2l6.7 3.6"/></svg></span><span class="nav-text">System Map</span></a><a class="nav-link" onclick="showSection('compare',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17h4l2-10 4 10 2-6h4"/><path d="M4 21h16"/></svg></span><span class="nav-text">Change Impact</span></a><div class="nav-section">Reliability</div><a class="nav-link" onclick="showSection('onboarding',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 8a5 5 0 0 1 10 0"/><path d="M7 16a5 5 0 0 0 10 0"/></svg></span><span class="nav-text">Onboarding</span></a><a class="nav-link" onclick="showSection('health',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-5"/></svg></span><span class="nav-text">Source Health</span></a><a class="nav-link" onclick="showSection('performance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span><span class="nav-text">Performance</span></a><a class="nav-link" onclick="showSection('customdash',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15v2M12 11v6M17 8v9"/></svg></span><span class="nav-text">Custom Dashboards</span></a><a class="nav-link" onclick="showSection('incidents',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10.3 3.7 2.6 18a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></span><span class="nav-text">Incidents</span></a><a class="nav-link" onclick="showSection('metrics',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="5"/><rect x="12" y="7" width="3" height="9"/><rect x="17" y="9" width="3" height="7"/></svg></span><span class="nav-text">Log Metrics</span></a><div class="nav-section">Setup</div><a class="nav-link" onclick="showSection('api',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span><span class="nav-text">API Ingestion</span></a><a class="nav-link" onclick="showSection('alerts',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><span class="nav-text">Alerts</span></a><a class="nav-link" onclick="showSection('connectors',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-text">Connectors</span></a><a class="nav-link" onclick="showSection('marketplace',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 9h18l-1 12H4L3 9Z"/><path d="M8 9V6a4 4 0 0 1 8 0v3"/></svg></span><span class="nav-text">Marketplace</span></a><a class="nav-link" onclick="showSection('billing',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg></span><span class="nav-text">Billing & Usage</span></a><a class="nav-link" onclick="showSection('compliance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9.5 12.5 1.8 1.8 3.7-4"/></svg></span><span class="nav-text">Compliance</span></a><a class="nav-link" onclick="showSection('history',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span><span class="nav-text">Upload History</span></a><a class="nav-link" data-title="Settings" onclick="showSection('settings',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1 1.64V21a2 2 0 1 1-4 0v-.08a1.8 1.8 0 0 0-1-1.64 1.8 1.8 0 0 0-2 .36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.64-1H3a2 2 0 1 1 0-4h.08a1.8 1.8 0 0 0 1.64-1 1.8 1.8 0 0 0-.36-2l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05a1.8 1.8 0 0 0 2 .36H9.3A1.8 1.8 0 0 0 10 2.08V2a2 2 0 1 1 4 0v.08a1.8 1.8 0 0 0 1 1.64h.09a1.8 1.8 0 0 0 2-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 2v.09A1.8 1.8 0 0 0 20.92 10H21a2 2 0 1 1 0 4h-.08a1.8 1.8 0 0 0-1.52 1Z"/></svg></span><span class="nav-text">Settings</span></a><div class="sidebar-footer"><div class="user-chip"><div class="avatar">{{ user.name[0].upper() if user.name else "U" }}</div><div><div class="user-name">{{ user.name }}</div><a href="{{ url_for('logout') }}" style="font-size:11px;color:var(--tx3)">Sign out</a></div></div></div></aside><button class="sidebar-edge-toggle" onclick="toggleSidebar()" title="Collapse / expand sidebar">‹</button>
 <main class="main">
@@ -281,6 +298,20 @@ function renderArchitecture(ep){
 function renderArchitectureSvg(ep){
 
   let arch=ep.architecture||{},nodes=arch.nodes||[],edges=arch.edges||[];
+  // Prefer a clean Mule/API flow lane over raw token/tag chains.
+  const cleanFlow=(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]))
+    .filter(Boolean)
+    .map(x=>String(x).replace(/^processor[:=\-\s]+/i,'').replace(/\/processors?\/\d+.*/i,'').replace(/-event-\d+-[0-9a-f].*/i,''))
+    .filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
+  if(cleanFlow.length>=3){
+    const cards=cleanFlow.map((step,i)=>{
+      const low=String(step).toLowerCase();
+      const tier=i===0||/client/.test(low)?'Client':/response/.test(low)?'Response':/api/.test(low)?'API':/external|service|flexcube|http|soap/.test(low)?'External':'Flow';
+      return `<div class="clean-flow-step ${tier.toLowerCase()}"><div class="clean-flow-index">${i+1}</div><b>${esc(step)}</b><span>${tier}</span></div>`;
+    }).join('<div class="clean-flow-arrow">→</div>');
+    setHTML('flow-diagram',`<div class="clean-flow-wrap"><div class="clean-flow-title">Clean execution topology</div><div class="clean-flow-lane">${cards}</div><div class="clean-flow-note">Processor event IDs are hidden. Registry rows now show only real APIs; processor executions are grouped into these logical flow steps.</div></div>`);
+    return;
+  }
   if(!nodes.length){
     setHTML('flow-diagram',(ep.flow_steps||[]).map((s,i,a)=>`<span class="flow-node">${esc(s)}</span>${i<a.length-1?'<span class="flow-arrow">→</span>':''}`).join('')||'No topology detected for this endpoint.');
     return;
@@ -835,6 +866,81 @@ function addMaskingRule(){const name=(byId('mask-field-name')?.value||'').trim()
 function removeMaskingRule(i){maskingRules.splice(i,1);renderMaskingRules();}
 async function saveMaskingSettings(){const d=await safeJson(await fetch('/settings/masking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules:maskingRules})}));maskingRules=d.rules||maskingRules;renderMaskingRules();alert(d.note||'Masking settings saved');}
 async function reprocessMasking(){const d=await safeJson(await fetch('/settings/masking/reprocess',{method:'POST'}));alert((d.warning||'Stored rows reprocessed')+' Sessions: '+(d.sessions_reprocessed||0));}
+
+
+// ── V34 UX clarity overrides: summary first, details on demand ─────────────
+function clipText(v,n=90){v=String(v||'').trim();return v.length>n?v.slice(0,n-1)+'…':v;}
+function shortApiName(name){name=String(name||'Unknown');name=name.replace(/^processor-/,'').replace(/-event-[a-f0-9-]+$/i,'');return clipText(name,54);}
+function classifyMaskField(name){const n=String(name||'').toLowerCase();
+  if(/phone|email|cust|name|mobile/.test(n)) return 'Personal Data';
+  if(/bank|acct|account|amt|amount|collection|micr|ifsc/.test(n)) return 'Financial Data';
+  if(/ref|id|key|token|code/.test(n)) return 'Identifiers & Keys';
+  return 'System Fields';
+}
+function renderMaskingRules(){
+  const box=byId('masking-rules-box'); if(!box)return;
+  if(!maskingRules.length){box.innerHTML='<span style="color:var(--tx3)">No masking rules yet.</span>';return;}
+  const groups={}; maskingRules.forEach((r,i)=>{const g=classifyMaskField(r.field_name);(groups[g]=groups[g]||[]).push([r,i]);});
+  const groupOrder=['Personal Data','Financial Data','Identifiers & Keys','System Fields'];
+  const enabled=maskingRules.filter(r=>r.enabled).length;
+  box.innerHTML='<div class="noise-toolbar"><span class="chip">'+enabled+' enabled</span><span class="chip">'+maskingRules.length+' total rules</span><label class="chip"><input id="mask-only-enabled" type="checkbox" onchange="renderMaskingRules()"> Show only enabled</label></div><div class="mask-group-grid">'+
+    groupOrder.filter(g=>groups[g]).map((g,gi)=>{
+      const rows=groups[g].filter(([r])=>!(byId('mask-only-enabled')?.checked) || r.enabled);
+      if(!rows.length)return '';
+      return '<details class="compact-section" '+(gi<3?'open':'')+'><summary>'+esc(g)+' <span class="muted-note">'+rows.length+' fields</span></summary><div class="compact-body">'+rows.map(([r,i])=>
+        '<div class="mask-row"><input type="checkbox" '+(r.enabled?'checked':'')+' onchange="maskingRules['+i+'].enabled=this.checked;renderMaskingRules()"><div><div class="field-name">'+esc(r.field_name)+'</div><small>'+maskExample(r.mask_type)+'</small></div><select class="select-styled" onchange="maskingRules['+i+'].mask_type=this.value;renderMaskingRules()"><option value="full" '+(r.mask_type==='full'?'selected':'')+'>Full</option><option value="partial" '+(r.mask_type==='partial'?'selected':'')+'>Partial</option><option value="hash" '+(r.mask_type==='hash'?'selected':'')+'>Hash</option><option value="searchable_mask" '+(r.mask_type==='searchable_mask'?'selected':'')+'>Searchable</option></select><button class="btn btn-ghost btn-xs" onclick="removeMaskingRule('+i+')">Remove</button></div>'
+      ).join('')+'</div></details>';
+    }).join('')+'</div>';
+}
+function cleanFindingsHtml(d){
+  const findings=d.findings||[], top=(d.top_errors||[])[0]||[], dm=d.derived_metrics||{};
+  const apps=(d.apps||[]).slice(0,4);
+  const keyRows=[];
+  if(top[0]) keyRows.push(['Top issue', top[0]+' · '+top[1]+' hit(s)', 'error']);
+  if(apps.length) keyRows.push(['Affected APIs', apps.join(', '), 'info']);
+  if(dm.p95) keyRows.push(['Latency', 'P95 '+dm.p95+'ms · avg '+(d.latency||0)+'ms', dm.p95>3000?'warn':'ok']);
+  const errFinding=findings.find(f=>f.type==='error'); if(errFinding) keyRows.push(['Error signal', errFinding.label, 'error']);
+  const warnFinding=findings.find(f=>f.type==='warn'); if(warnFinding) keyRows.push(['Warning signal', warnFinding.label, 'warn']);
+  return '<div class="clean-summary-grid"><div class="clean-card drillable" onclick="quickLevel(\'ERROR\')"><small>Errors</small><b class="pill-error">'+Number(d.errors||0).toLocaleString()+'</b></div><div class="clean-card drillable" onclick="quickLevel(\'WARN\')"><small>Warnings</small><b class="pill-warn">'+Number(d.warns||0).toLocaleString()+'</b></div><div class="clean-card"><small>Top issue</small><b>'+esc(top[0]||'No dominant issue')+'</b></div><div class="clean-card drillable" onclick="showSection(\'flow\')"><small>Affected APIs</small><b>'+esc(apps.join(', ')||String(dm.apis||0))+'</b></div></div>'+ 
+    '<div class="insight-list">'+(keyRows.map(r=>'<div class="insight-row drillable" onclick="'+(r[0].includes('API')?'showSection(\'flow\')':'showSection(\'logs\')')+'"><div class="label">'+esc(r[0])+'</div><div>'+esc(clipText(r[1],180))+'</div><span class="badge badge-'+(r[2]==='error'?'error':r[2]==='warn'?'warn':r[2]==='ok'?'ok':'info')+'">'+esc(r[2]).toUpperCase()+'</span></div>').join('')||'<div class="muted-note">No insights yet. Upload logs to generate findings.</div>')+'</div>'+ 
+    '<details class="compact-section"><summary>Raw findings / evidence <span class="muted-note">collapsed to reduce noise</span></summary><div class="compact-body">'+findings.slice(0,12).map(f=>'<div class="finding-row"><span>'+esc(clipText(f.label,240))+'</span><span class="badge badge-'+(f.type==='error'?'error':f.type==='warn'?'warn':f.type==='ok'?'ok':'info')+'">'+esc(f.type).toUpperCase()+'</span></div>').join('')+'</div></details>';
+}
+function groupSmartTags(tags){
+  if(!tags||!tags.length)return '—';
+  const buckets={Flows:[],APIs:[],Errors:[],Infra:[],IDs:[],Other:[]};
+  tags.forEach(t=>{const x=String(t);const l=x.toLowerCase();let k='Other';
+    if(/flow|sub flow|logger/.test(l))k='Flows'; else if(/api|endpoint|call/.test(l))k='APIs'; else if(/error|fail|exception|timeout|warn/.test(l))k='Errors'; else if(/db|database|flexcube|external|service|infra|host/.test(l))k='Infra'; else if(/[a-f0-9]{8,}|event|trace|correlation/.test(l))k='IDs';
+    if(!buckets[k].includes(x))buckets[k].push(x);
+  });
+  return Object.entries(buckets).filter(([k,v])=>v.length).map(([k,v])=>{
+    const visible=v.slice(0,8).map(x=>'<span class="chip actionable" onclick="quickSearch(\''+esc(String(x)).replace(/'/g,'&#39;')+'\')">'+esc(clipText(x,42))+'</span>').join('');
+    const more=v.length>8?'<span class="tag-show-more">+'+(v.length-8)+' more</span>':'';
+    return '<details class="compact-section" open><summary>'+esc(k)+' <span class="muted-note">'+v.length+'</span></summary><div class="compact-body">'+visible+more+'</div></details>';
+  }).join('');
+}
+async function loadApiRegistry(){
+  const env=(byId('sm-env-filter')||{}).value||'';
+  const data=await safeJson(await fetch('/api/v1/api-registry'+(env?'?env='+encodeURIComponent(env):''))).catch(()=>({apis:[]}));
+  const rows=(data.apis||[]); window._apiRegistryRows=rows;
+  const grouped={}; rows.forEach(r=>{const key=shortApiName(r.api_name); if(!grouped[key]) grouped[key]={name:key, rows:[], endpoints:0, errors:0, downstream:new Set(), envs:new Set(), owner:r.owner||'Unassigned', base:r.base_url||'—'}; const g=grouped[key]; g.rows.push(r); g.endpoints+=(r.endpoints||[]).length; (r.downstream_systems||[]).forEach(x=>g.downstream.add(x)); g.envs.add(r.environment||'PROD'); if(r.owner&&r.owner!=='Unassigned')g.owner=r.owner; if(r.base_url)g.base=r.base_url; });
+  const list=Object.values(grouped).sort((a,b)=>b.rows.length-a.rows.length);
+  const html='<div class="registry-toolbar"><div><b>'+list.length+' grouped API entries</b><div class="muted-note">Duplicate processor/event rows are collapsed. Open details only when required.</div></div><button class="btn btn-ghost btn-sm" onclick="loadApiRegistry()">Refresh</button></div><table><thead><tr><th>API / Group</th><th>Env</th><th>Owner</th><th>Health</th><th>Downstream</th><th>Endpoints</th><th>Action</th></tr></thead><tbody>'+ (list.map((g,idx)=>{
+    const ds=[...g.downstream]; const tags=ds.slice(0,3).map(x=>'<span class="chip">'+esc(clipText(x,24))+'</span>').join('')+(ds.length>3?'<span class="muted-note">+'+(ds.length-3)+' more</span>':'');
+    const first=g.rows[0]||{}; const health=g.rows.length>10?'Watch':'OK';
+    return '<tr><td><div class="registry-name"><b>'+esc(g.name)+'</b></div><div class="registry-sub">'+g.rows.length+' raw detected row(s) collapsed</div></td><td>'+esc([...g.envs].join(', '))+'</td><td>'+esc(g.owner||'Unassigned')+'</td><td><span class="badge badge-'+(health==='OK'?'ok':'warn')+'">'+health+'</span></td><td class="registry-tags">'+(tags||'—')+'</td><td>'+g.endpoints+'</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm('+first.id+')">Edit</button></td></tr><tr><td colspan="7"><details class="compact-section"><summary>Show raw rows for '+esc(g.name)+'</summary><div class="compact-body raw-preview">'+g.rows.slice(0,15).map(r=>'• '+esc(r.api_name)+' · endpoints '+((r.endpoints||[]).length)).join('\n')+(g.rows.length>15?'\n+'+(g.rows.length-15)+' more rows':'')+'</div></details></td></tr>';
+  }).join('') || '<tr><td colspan="7">No registry found. Add one above.</td></tr>') + '</tbody></table>';
+  setHTML('api-registry-list',html);
+}
+// Re-wrap renderResult to replace noisy details with summaries.
+const _v34RenderResult = renderResult;
+renderResult=function(d){
+  _v34RenderResult(d);
+  const fEl=byId('findings'); if(fEl) fEl.innerHTML=cleanFindingsHtml(d||{});
+  const st=byId('smart-tags'); if(st) st.innerHTML=groupSmartTags((d||{}).smart_tags||[]);
+  const te=byId('top-errors'); if(te) te.innerHTML=((d||{}).top_errors||[]).slice(0,8).map(([k,v])=>'<div class="finding-row drillable" onclick="quickSearch(\''+esc(String(k)).replace(/'/g,'&#39;')+'\')"><span>'+esc(clipText(k,90))+'</span><b class="pill-error">'+v+'</b></div>').join('')||'No error clusters.';
+  const ns=byId('next-steps'); if(ns && (d||{}).suggestions) ns.innerHTML=(d.suggestions||[]).slice(0,5).map(x=>'• '+esc(clipText(x,160))).join('<br>')||'—';
+};
+
 setTimeout(loadMaskingSettings,800);
 
 setInterval(refreshEnterprisePanels,15000);

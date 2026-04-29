@@ -1033,7 +1033,12 @@ def build_log_rows(records, env, filename="", user_id=None):
             # Mule thread names can contain '[api].flow'; keep only API token.
             mm = re.search(r'([A-Za-z0-9_.-]*(?:api|API)[A-Za-z0-9_.-]*)', app)
             app = mm.group(1) if mm else app
-        if app != "unknown": current_app=app
+        # Avoid treating Mule processor/event tokens as application names.
+        if app and _looks_like_processor_event_name(app):
+            cfg = extract_first([r'\[([A-Za-z0-9_.-]+-api)\]\.[A-Za-z0-9_-]+', r'\[([A-Za-z0-9_.-]+-api)\]', r'([A-Za-z0-9_.-]+-api)-config'], line, '')
+            app = cfg or current_app or 'unknown'
+        app = _clean_service_name(app) or 'unknown'
+        if app != "unknown" and not _looks_like_processor_event_name(app): current_app=app
         trace = extract_trace_id(line)
         status = extract_first([r'"HttpStatus"\s*:\s*(\d{3})', r"(?:status|statusCode|httpStatus)\s*[=:]\s*(\d{3})", r"\b(5\d\d|4\d\d|2\d\d)\b"], line, "")
         lat = extract_first([
@@ -1053,6 +1058,7 @@ def build_log_rows(records, env, filename="", user_id=None):
                 except Exception:
                     lat = ""
         flow = extract_first([r"processor:\s*([^;\]]+)", r'"FlowName"\s*:\s*"([^"]+)"', r"\]\.([a-zA-Z0-9_-]+flow)\."], line, "")
+        flow = _clean_service_name(flow) if flow else ""
         rows.append({
             "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
@@ -1253,6 +1259,7 @@ def _clean_service_name(value: str) -> str:
     """Convert noisy log processor names into readable architecture service nodes."""
     s = str(value or '').strip().strip('"\'[]{}(),;')
     if not s: return ''
+    s = _normalise_mule_component_name(s) if '_normalise_mule_component_name' in globals() else s
     # Drop log-level prefixes that bleed into names
     s = re.sub(r'\b(?:INFO|DEBUG|WARN|ERROR|SUCCESS|FAILURE|TRACE|FATAL)\b.*$', '', s, flags=re.I).strip()
     # Drop escape sequences
@@ -1272,6 +1279,33 @@ def _clean_service_name(value: str) -> str:
     if len(s) > 52:
         s = s[:52].rstrip('-_.')
     return s
+
+
+def _normalise_mule_component_name(value: str) -> str:
+    s = str(value or '').strip()
+    if not s:
+        return ''
+    s = re.sub(r'^processor[:=\-\s]+', '', s, flags=re.I)
+    s = re.sub(r'/processors?/\d+.*$', '', s, flags=re.I)
+    s = re.sub(r'/processors?.*$', '', s, flags=re.I)
+    s = re.sub(r'-event-\d+-[0-9a-f]{4,}.*$', '', s, flags=re.I)
+    s = re.sub(r'-event-[0-9a-f]{4,}.*$', '', s, flags=re.I)
+    s = re.sub(r'\s*;\s*event[:=].*$', '', s, flags=re.I)
+    s = re.sub(r'\s+event[:=].*$', '', s, flags=re.I)
+    return s.strip(' -_/;:')
+
+def _looks_like_processor_event_name(value: str) -> bool:
+    low = str(value or '').lower()
+    return bool(re.search(r'(^|[\s/_-])processor[:=_-]', low) or re.search(r'-event-\d+-[0-9a-f]{4,}', low) or 'processors/' in low)
+
+def _is_valid_api_inventory_name(value: str) -> bool:
+    name = str(value or '').strip()
+    low = name.lower()
+    if not name or name in ('unknown', 'unknown-api', 'loading'):
+        return False
+    if _looks_like_processor_event_name(name):
+        return False
+    return ('api' in low or 'service' in low or 'engine' in low)
 
 
 def _service_tier(name: str) -> str:
@@ -1395,6 +1429,8 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
             return False
         low = name.lower()
         if low in NOISE:
+            return False
+        if _looks_like_processor_event_name(name):
             return False
         # Reject if it looks like a URL path segment starting with /
         if name.startswith('/'):
@@ -1540,8 +1576,15 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
 def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id: int):
     """Extract API endpoint maps plus a tiered architecture graph for each endpoint."""
     api_groups = {}
+    last_api = ''
     for r in rows:
         api = _clean_service_name(r.get('app') or 'unknown') or 'unknown'
+        if _looks_like_processor_event_name(api) or not _is_valid_api_inventory_name(api):
+            msg = r.get('message', '') or ''
+            recovered = extract_first([r'\[([A-Za-z0-9_.-]+-api)\]\.[A-Za-z0-9_-]+', r'\[([A-Za-z0-9_.-]+-api)\]', r'([A-Za-z0-9_.-]+-api)-config'], msg, last_api or 'unknown')
+            api = _clean_service_name(recovered) or last_api or 'unknown'
+        if api != 'unknown':
+            last_api = api
         api_groups.setdefault(api, []).append(r)
 
     # URI patterns: strictly match HTTP path patterns only (must start with /)
@@ -1604,6 +1647,10 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
             if 'Response' not in flow_steps:
                 flow_steps.append('Response')
 
+            arch['simple_flow'] = flow_steps[:14]
+            arch.setdefault('hints', [])
+            arch['hints'].append('Processor event IDs are normalized and hidden; topology shows stable Mule flow components only.')
+
             req_count  = len(ep_rows)
             err_count  = sum(1 for r in ep_rows if r.get('level') in ('ERROR', 'FAILURE'))
             lats       = [int(r.get('latency') or 0) for r in ep_rows if r.get('latency') and int(r.get('latency') or 0) > 0]
@@ -1636,7 +1683,10 @@ def _json_loads_safe(value, default=None):
         return default
 
 def _row_api_name(row, fallback="unknown-api"):
-    return _clean_service_name(row.get("app") or row.get("application") or fallback or "unknown-api")
+    name = _clean_service_name(row.get("app") or row.get("application") or fallback or "unknown-api")
+    if _looks_like_processor_event_name(name):
+        return _clean_service_name(fallback or "unknown-api")
+    return name
 
 def _row_endpoint(row):
     raw = row.get("endpoint") or row.get("path") or row.get("uri") or ""
@@ -2697,6 +2747,8 @@ def api_system_map():
     # Build hierarchy: api_name → [endpoints]
     api_map: dict = {}
     for r in records:
+        if not _is_valid_api_inventory_name(r.api_name):
+            continue
         api_map.setdefault(r.api_name, {
             "api_name": r.api_name,
             "environments": set(),
@@ -2756,6 +2808,8 @@ def api_system_map():
     if api_filter:
         rq = rq.filter(ApiRegistry.api_name.ilike(f"%{api_filter}%"))
     for reg in rq.order_by(ApiRegistry.last_seen_at.desc()).all():
+        if not _is_valid_api_inventory_name(reg.api_name):
+            continue
         data = api_map.setdefault(reg.api_name, {
             "api_name": reg.api_name,
             "environments": set(),
@@ -2821,6 +2875,8 @@ def api_registry_inventory():
         api_name = _clean_service_name(data.get("api_name") or data.get("name") or "")
         if not api_name:
             return jsonify({"error": "api_name is required"}), 400
+        if not _is_valid_api_inventory_name(api_name):
+            return jsonify({"error": "Enter a real API/application name, not a processor event id. Example: p-portal-kotakenach-api"}), 400
         env = str(data.get("environment") or "PROD").upper()[:20]
         reg = ApiRegistry.query.filter_by(user_id=user.id, api_name=api_name, environment=env).first()
         if not reg:
@@ -2858,6 +2914,8 @@ def api_registry_inventory():
     records = q.order_by(ApiRegistry.last_seen_at.desc()).all()
     output = []
     for r in records:
+        if not _is_valid_api_inventory_name(r.api_name):
+            continue
         eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=r.api_name, environment=r.environment).order_by(ApiEndpoint.request_count.desc()).all()
         output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "downstream_systems": _json_loads_safe(r.downstream_systems_json, []), "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
     return jsonify({"apis": output, "total": len(output)})
