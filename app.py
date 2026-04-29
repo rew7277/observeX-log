@@ -230,6 +230,81 @@ class ApiFlowMap(db.Model):
     sample_trace_id = db.Column(db.String(120), default="")
     created_at      = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+
+class ApiRegistry(db.Model):
+    """Master API inventory used by System Map and API dropdowns."""
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    api_name     = db.Column(db.String(200), nullable=False, index=True)
+    environment  = db.Column(db.String(20), default="PROD", index=True)
+    base_url     = db.Column(db.String(400), default="")
+    owner        = db.Column(db.String(120), default="")
+    status       = db.Column(db.String(40), default="active")
+    last_seen_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("user_id", "api_name", "environment", name="uq_api_registry_user_api_env"),)
+
+class ApiEndpoint(db.Model):
+    """Endpoint inventory under each API. Powers API Name -> Endpoints -> Flow."""
+    id              = db.Column(db.Integer, primary_key=True)
+    user_id         = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    api_registry_id = db.Column(db.Integer, db.ForeignKey("api_registry.id"), nullable=True, index=True)
+    api_name        = db.Column(db.String(200), nullable=False, index=True)
+    environment     = db.Column(db.String(20), default="PROD", index=True)
+    endpoint        = db.Column(db.String(300), default="/", index=True)
+    method          = db.Column(db.String(10), default="")
+    request_count   = db.Column(db.Integer, default=0)
+    error_count     = db.Column(db.Integer, default=0)
+    avg_latency_ms  = db.Column(db.Integer, default=0)
+    last_seen_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at      = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("user_id", "api_name", "environment", "endpoint", "method", name="uq_api_endpoint_user_api_env_ep_method"),)
+
+class TraceIndex(db.Model):
+    """Trace lookup table for fast Trace Explorer without rescanning raw files."""
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    session_id     = db.Column(db.Integer, db.ForeignKey("log_session.id"), nullable=False, index=True)
+    trace_id       = db.Column(db.String(160), nullable=False, index=True)
+    environment    = db.Column(db.String(20), default="PROD", index=True)
+    api_name       = db.Column(db.String(200), default="", index=True)
+    endpoint       = db.Column(db.String(300), default="/")
+    status         = db.Column(db.String(30), default="success")
+    latency_ms     = db.Column(db.Integer, default=0)
+    rows_json      = db.Column(db.Text, default="[]")
+    created_at     = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class LogEvent(db.Model):
+    """Searchable parsed log rows. Keeps Global Search fast and environment-aware."""
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    session_id  = db.Column(db.Integer, db.ForeignKey("log_session.id"), nullable=False, index=True)
+    environment = db.Column(db.String(20), default="PROD", index=True)
+    api_name    = db.Column(db.String(200), default="", index=True)
+    endpoint    = db.Column(db.String(300), default="/")
+    trace_id    = db.Column(db.String(160), default="", index=True)
+    level       = db.Column(db.String(20), default="INFO", index=True)
+    event_time  = db.Column(db.String(80), default="")
+    message     = db.Column(db.Text, default="")
+    latency_ms  = db.Column(db.Integer, default=0)
+    row_json    = db.Column(db.Text, default="{}")
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class FlowEdge(db.Model):
+    """Persisted graph edge for API/System Map visualisation."""
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    session_id  = db.Column(db.Integer, db.ForeignKey("log_session.id"), nullable=False, index=True)
+    environment = db.Column(db.String(20), default="PROD", index=True)
+    api_name    = db.Column(db.String(200), default="", index=True)
+    endpoint    = db.Column(db.String(300), default="/")
+    source      = db.Column(db.String(200), nullable=False)
+    target      = db.Column(db.String(200), nullable=False)
+    label       = db.Column(db.String(80), default="calls")
+    count       = db.Column(db.Integer, default=1)
+    errors      = db.Column(db.Integer, default=0)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
 class AlertRule(db.Model):
     id         = db.Column(db.Integer, primary_key=True)
     user_id    = db.Column(db.Integer, db.ForeignKey("user.id"))
@@ -1430,6 +1505,129 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
             ))
     return flow_maps
 
+
+def _json_loads_safe(value, default=None):
+    if default is None:
+        default = []
+    try:
+        return json.loads(value) if value else default
+    except Exception:
+        return default
+
+def _row_api_name(row, fallback="unknown-api"):
+    return _clean_service_name(row.get("app") or row.get("application") or fallback or "unknown-api")
+
+def _row_endpoint(row):
+    return _normalise_endpoint(row.get("endpoint") or row.get("path") or row.get("uri") or "/") or "/"
+
+def _row_trace(row):
+    return str(row.get("trace") or row.get("trace_id") or row.get("correlationId") or row.get("event") or "")[:160]
+
+def persist_observability_indexes(user_id, session_id, rows, raw, env, filename, flow_maps=None):
+    """Persist API registry, endpoint inventory, log events, trace index and flow edges."""
+    rows = list(rows or [])[:5000]
+    env = (env or "PROD").upper()
+    fallback_api = filename or "unknown-api"
+    for model in (LogEvent, TraceIndex, FlowEdge):
+        try:
+            model.query.filter_by(user_id=user_id, session_id=session_id).delete()
+        except Exception:
+            db.session.rollback()
+    endpoint_stats = {}
+    trace_groups = {}
+    for r in rows:
+        api_name = _row_api_name(r, fallback_api)
+        endpoint = _row_endpoint(r)
+        trace_id = _row_trace(r)
+        level = str(r.get("level") or detect_level(r.get("message", "")) or "INFO").upper()[:20]
+        lat_raw = r.get("latency") or 0
+        latency = int(lat_raw) if str(lat_raw).isdigit() else 0
+        key = (api_name, endpoint, str(r.get("method") or "").upper()[:10])
+        stat = endpoint_stats.setdefault(key, {"requests": 0, "errors": 0, "latencies": []})
+        stat["requests"] += 1
+        stat["errors"] += 1 if level in ("ERROR", "FAILURE") else 0
+        if latency > 0:
+            stat["latencies"].append(latency)
+        db.session.add(LogEvent(
+            user_id=user_id, session_id=session_id, environment=env, api_name=api_name,
+            endpoint=endpoint, trace_id=trace_id, level=level, event_time=str(r.get("time") or "")[:80],
+            message=str(r.get("message") or "")[:4000], latency_ms=latency, row_json=json.dumps(r, default=str)
+        ))
+        if trace_id:
+            rr = dict(r)
+            rr.update({"api_name": api_name, "endpoint": endpoint, "level": level, "latency": latency})
+            trace_groups.setdefault(trace_id, []).append(rr)
+    now = datetime.datetime.utcnow()
+    for (api_name, endpoint, method), stat in endpoint_stats.items():
+        reg = ApiRegistry.query.filter_by(user_id=user_id, api_name=api_name, environment=env).first()
+        if not reg:
+            reg = ApiRegistry(user_id=user_id, api_name=api_name, environment=env, status="active")
+            db.session.add(reg); db.session.flush()
+        reg.last_seen_at = now
+        avg_lat = round(sum(stat["latencies"]) / len(stat["latencies"])) if stat["latencies"] else 0
+        ep = ApiEndpoint.query.filter_by(user_id=user_id, api_name=api_name, environment=env, endpoint=endpoint, method=method).first()
+        if not ep:
+            ep = ApiEndpoint(user_id=user_id, api_registry_id=reg.id, api_name=api_name, environment=env, endpoint=endpoint, method=method)
+            db.session.add(ep)
+        ep.api_registry_id = reg.id
+        ep.request_count = int(ep.request_count or 0) + stat["requests"]
+        ep.error_count = int(ep.error_count or 0) + stat["errors"]
+        ep.avg_latency_ms = avg_lat
+        ep.last_seen_at = now
+    for trace_id, tr_rows in list(trace_groups.items())[:1000]:
+        max_lat = max((int(x.get("latency") or 0) for x in tr_rows), default=0)
+        has_error = any(str(x.get("level", "")).upper() in ("ERROR", "FAILURE") for x in tr_rows)
+        db.session.add(TraceIndex(
+            user_id=user_id, session_id=session_id, trace_id=trace_id, environment=env,
+            api_name=_row_api_name(tr_rows[0], fallback_api), endpoint=_row_endpoint(tr_rows[0]),
+            status="error" if has_error else "success", latency_ms=max_lat,
+            rows_json=json.dumps(tr_rows[:250], default=str)
+        ))
+    for fm in flow_maps or []:
+        try:
+            arch = _json_loads_safe(fm.architecture_json, {})
+            for edge in arch.get("edges", [])[:200]:
+                db.session.add(FlowEdge(
+                    user_id=user_id, session_id=session_id, environment=env, api_name=fm.api_name, endpoint=fm.endpoint or "/",
+                    source=str(edge.get("from") or edge.get("source") or "")[:200],
+                    target=str(edge.get("to") or edge.get("target") or "")[:200],
+                    label=str(edge.get("label") or "calls")[:80],
+                    count=int(edge.get("count") or 1), errors=int(edge.get("errors") or 0)
+                ))
+        except Exception:
+            app.logger.exception("Flow edge indexing failed")
+
+def search_indexed_log_events(user_id, q="", env="", limit=200):
+    query = LogEvent.query.filter_by(user_id=user_id)
+    if env and str(env).upper() not in ("ALL", "ANY"):
+        query = query.filter(LogEvent.environment.ilike(str(env)))
+    terms = [t for t in re.split(r"\s+", q or "") if t]
+    for term in terms:
+        if ":" in term:
+            k, v = term.split(":", 1)
+            v = v.strip()
+            if not v:
+                continue
+            lk = k.lower()
+            if lk in ("level", "severity"):
+                query = query.filter(LogEvent.level.ilike(v))
+            elif lk in ("trace", "traceid", "event", "eventid"):
+                query = query.filter(LogEvent.trace_id.ilike(f"%{v}%"))
+            elif lk in ("api", "app", "application"):
+                query = query.filter(LogEvent.api_name.ilike(f"%{v}%"))
+            elif lk in ("endpoint", "path", "uri"):
+                query = query.filter(LogEvent.endpoint.ilike(f"%{v}%"))
+            elif lk == "env":
+                query = query.filter(LogEvent.environment.ilike(v))
+            else:
+                query = query.filter(LogEvent.message.ilike(f"%{term}%"))
+        else:
+            like = f"%{term}%"
+            query = query.filter(db.or_(LogEvent.message.ilike(like), LogEvent.trace_id.ilike(like), LogEvent.api_name.ilike(like), LogEvent.endpoint.ilike(like)))
+    rows = query.order_by(LogEvent.created_at.desc(), LogEvent.id.desc()).limit(limit).all()
+    return [(_json_loads_safe(r.row_json, {}) or {"time": r.event_time, "level": r.level, "app": r.api_name, "endpoint": r.endpoint, "trace": r.trace_id, "latency": r.latency_ms, "message": r.message}) for r in rows]
+
+
 def send_reset_email(user):
     token   = secrets.token_urlsafe(40)
     expires = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
@@ -1802,6 +2000,8 @@ def analyse():
             flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user.id)
             for fm in flow_maps:
                 db.session.add(fm)
+            db.session.flush()
+            persist_observability_indexes(user.id, ls.id, rows_to_store, raw, env, fname, flow_maps)
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -1832,11 +2032,19 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
         try:
             job.status = "running"; job.started_at = datetime.datetime.utcnow(); db.session.commit()
             result = analyse_log_text(raw, query, env, filename)
+            rows_to_store = result.get("log_rows", [])[:5000]
+            result_summary = {k: v for k, v in result.items() if k != "log_rows"}
             ls = LogSession(user_id=user_id, environment=env, filename=filename,
                             total_lines=result["total"], error_count=result["errors"],
                             warn_count=result["warns"], avg_latency=result["latency"],
-                            apps_found=",".join(result["apps"]))
+                            apps_found=",".join(result["apps"]),
+                            log_rows_json=json.dumps(rows_to_store, default=str),
+                            result_json=json.dumps(result_summary, default=str))
             db.session.add(ls); db.session.flush()
+            flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user_id)
+            for fm in flow_maps:
+                db.session.add(fm)
+            persist_observability_indexes(user_id, ls.id, rows_to_store, raw, env, filename, flow_maps)
             persist_raw_upload(user_id, ls.id, filename, raw)
             job.status = "success"; job.total_lines = result.get("total", 0); job.finished_at = datetime.datetime.utcnow()
             db.session.commit()
@@ -1936,6 +2144,8 @@ def api_ingest():
     started = time.time()
     result = analyse_log_text(str(raw), "", env, app_n)
     duration_ms = int((time.time() - started) * 1000)
+    rows_to_store = result.get("log_rows", [])[:5000]
+    result_summary = {k: v for k, v in result.items() if k != "log_rows"}
     ls = LogSession(
         user_id    = user.id,
         environment= env,
@@ -1945,13 +2155,19 @@ def api_ingest():
         warn_count = result["warns"],
         avg_latency= result["latency"],
         apps_found = ",".join(result["apps"]),
+        log_rows_json=json.dumps(rows_to_store, default=str),
+        result_json=json.dumps(result_summary, default=str),
     )
     db.session.add(ls)
     db.session.flush()
     try:
+        flow_maps = extract_system_map(rows_to_store, str(raw), env, ls.id, user.id)
+        for fm in flow_maps:
+            db.session.add(fm)
+        persist_observability_indexes(user.id, ls.id, rows_to_store, str(raw), env, app_n, flow_maps)
         persist_raw_upload(user.id, ls.id, app_n, str(raw))
     except Exception:
-        app.logger.exception("Could not persist API ingestion to volume")
+        app.logger.exception("Could not persist/index API ingestion")
     db.session.add(QueryMetric(user_id=user.id, action="api_ingest", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(str(raw).encode("utf-8"))))
     audit_event(user, "logs.api_ingest", app_n, {"session_id": ls.id, "environment": env, "source": source, "total": result.get("total"), "errors": result.get("errors")})
     db.session.commit()
@@ -2349,6 +2565,54 @@ def api_system_map():
 
 
 
+
+@app.route("/api/v1/api-registry", methods=["GET", "POST"])
+@login_required
+def api_registry_inventory():
+    user = get_current_user()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        api_name = _clean_service_name(data.get("api_name") or data.get("name") or "")
+        if not api_name:
+            return jsonify({"error": "api_name is required"}), 400
+        env = str(data.get("environment") or "PROD").upper()[:20]
+        reg = ApiRegistry.query.filter_by(user_id=user.id, api_name=api_name, environment=env).first()
+        if not reg:
+            reg = ApiRegistry(user_id=user.id, api_name=api_name, environment=env)
+            db.session.add(reg)
+        reg.base_url = str(data.get("base_url") or reg.base_url or "")[:400]
+        reg.owner = str(data.get("owner") or reg.owner or "")[:120]
+        reg.status = str(data.get("status") or reg.status or "active")[:40]
+        reg.last_seen_at = datetime.datetime.utcnow()
+        endpoints = data.get("endpoints") or []
+        db.session.flush()
+        for item in endpoints:
+            if isinstance(item, str):
+                item = {"endpoint": item}
+            endpoint = _normalise_endpoint(item.get("endpoint") or item.get("path") or "/")
+            method = str(item.get("method") or "").upper()[:10]
+            ep = ApiEndpoint.query.filter_by(user_id=user.id, api_name=api_name, environment=env, endpoint=endpoint, method=method).first()
+            if not ep:
+                ep = ApiEndpoint(user_id=user.id, api_registry_id=reg.id, api_name=api_name, environment=env, endpoint=endpoint, method=method)
+                db.session.add(ep)
+            ep.api_registry_id = reg.id
+            ep.last_seen_at = datetime.datetime.utcnow()
+        audit_event(user, "api_registry.upsert", api_name, {"environment": env, "endpoints": len(endpoints)})
+        db.session.commit()
+        return jsonify({"status": "saved", "id": reg.id, "api_name": reg.api_name, "environment": reg.environment})
+    env = request.args.get("env", "").strip().upper()
+    q = ApiRegistry.query.filter_by(user_id=user.id)
+    if env:
+        q = q.filter(ApiRegistry.environment.ilike(env))
+    records = q.order_by(ApiRegistry.last_seen_at.desc()).all()
+    output = []
+    for r in records:
+        eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=r.api_name, environment=r.environment).order_by(ApiEndpoint.request_count.desc()).all()
+        output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
+    return jsonify({"apis": output, "total": len(output)})
+
+
+
 @app.route("/api/v1/architecture", methods=["GET"])
 @login_required
 def api_architecture():
@@ -2365,21 +2629,20 @@ def api_logs_search():
     if not user:
         return jsonify({"error":"Invalid API key"}), 401
     q = request.args.get("q", "")
-    env = request.args.get("environment", "PROD")
+    env = request.args.get("environment", request.args.get("env", "PROD"))
     limit = min(1000, int(request.args.get("limit", "200") or 200))
-    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
-    raw = ""
-    if os.path.isdir(user_dir):
-        for name in sorted(os.listdir(user_dir))[-10:]:
-            if name.endswith(".masked.log"):
-                try:
-                    raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
-                except Exception:
-                    pass
-    result = analyse_log_text(raw, q, env, "api-search") if raw else {"log_rows": [], "total": 0}
-    audit_event(user, "logs.api_search", q, {"limit": limit})
+    rows = search_indexed_log_events(user.id, q, env, limit)
+    if not rows:
+        recent = LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).limit(10).all()
+        fallback = []
+        for sess in recent:
+            if env and str(env).upper() not in ("ALL", "ANY") and str(sess.environment or "").upper() != str(env).upper():
+                continue
+            fallback.extend(_json_loads_safe(sess.log_rows_json, []))
+        rows = fallback[:limit]
+    audit_event(user, "logs.api_search", q, {"limit": limit, "environment": env, "indexed": True})
     db.session.commit()
-    return jsonify({"total": result.get("total",0), "rows": result.get("log_rows",[])[:limit]})
+    return jsonify({"total": len(rows), "rows": rows[:limit], "source": "indexed-db"})
 
 @app.route("/api/v1/trace/<trace_id>", methods=["GET"])
 def api_trace_lookup(trace_id):
@@ -2389,24 +2652,15 @@ def api_trace_lookup(trace_id):
     user = lookup_user_by_api_key(auth.split(" ",1)[1])
     if not user:
         return jsonify({"error":"Invalid API key"}), 401
-    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
-    raw = ""
-    if os.path.isdir(user_dir):
-        for name in sorted(os.listdir(user_dir))[-10:]:
-            if name.endswith(".masked.log"):
-                try:
-                    raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
-                except Exception:
-                    pass
-    rows = []
-    if raw:
-        result = analyse_log_text(raw, f"trace:{trace_id}", request.args.get("environment", "PROD"), "api-trace")
-        rows = result.get("log_rows", [])
-    audit_event(user, "trace.lookup", trace_id, {"rows": len(rows)})
+    env = request.args.get("environment", request.args.get("env", ""))
+    q = TraceIndex.query.filter_by(user_id=user.id, trace_id=trace_id)
+    if env and str(env).upper() not in ("ALL", "ANY"):
+        q = q.filter(TraceIndex.environment.ilike(str(env)))
+    record = q.order_by(TraceIndex.created_at.desc()).first()
+    rows = _json_loads_safe(record.rows_json, []) if record else search_indexed_log_events(user.id, f"trace:{trace_id}", env or "ALL", 500)
+    audit_event(user, "trace.lookup", trace_id, {"rows": len(rows), "indexed": bool(record)})
     db.session.commit()
-    return jsonify({"trace_id": trace_id, "rows": rows})
-
-
+    return jsonify({"trace_id": trace_id, "environment": record.environment if record else env, "api_name": record.api_name if record else "", "endpoint": record.endpoint if record else "", "status": record.status if record else ("found" if rows else "not_found"), "latency_ms": record.latency_ms if record else 0, "rows": rows})
 
 @app.route("/api/v1/logs/nl-search", methods=["GET"])
 def api_natural_language_search():
