@@ -24,7 +24,10 @@
 .brand-name{color:#fff!important}.brand-logo{color:#fff!important}
 .dashboard-viz-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin:18px 0}.viz-panel{background:linear-gradient(180deg,rgba(31,31,53,.92),rgba(18,18,32,.88));border:1px solid var(--bd);border-radius:26px;padding:22px;box-shadow:0 16px 42px rgba(0,0,0,.18)}.viz-panel h3{font-size:18px;margin-bottom:12px}.viz-sub{color:var(--tx3);font-size:12px;margin-top:-8px;margin-bottom:14px}.trend-chart{height:210px;display:flex;align-items:end;gap:7px;padding:16px 8px 4px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.025),transparent);border:1px solid rgba(148,163,184,.08)}.trend-bar{flex:1;min-width:7px;border-radius:10px 10px 4px 4px;background:linear-gradient(180deg,#818cf8,#4f46e5);position:relative}.trend-bar.err{background:linear-gradient(180deg,#fb7185,#e11d48)}.trend-bar.warn{background:linear-gradient(180deg,#fbbf24,#d97706)}.donut-wrap{display:grid;grid-template-columns:180px 1fr;gap:18px;align-items:center}.donut{width:170px;height:170px;border-radius:50%;background:conic-gradient(#22c55e 0 70%,#f59e0b 70% 85%,#ef4444 85% 100%);display:grid;place-items:center;box-shadow:inset 0 0 0 18px rgba(10,10,18,.85)}.donut-inner{background:#101020;border:1px solid var(--bd);width:112px;height:112px;border-radius:50%;display:grid;place-items:center;text-align:center}.donut-inner b{font-size:25px}.health-list{display:grid;gap:10px}.health-row{display:grid;grid-template-columns:1fr 62px;gap:10px;align-items:center}.health-track{height:9px;background:#0b0b17;border-radius:999px;overflow:hidden;border:1px solid var(--bd)}.health-fill{height:100%;display:block;background:linear-gradient(90deg,#22c55e,#a3e635);border-radius:999px}.health-fill.warn{background:linear-gradient(90deg,#f59e0b,#facc15)}.health-fill.err{background:linear-gradient(90deg,#ef4444,#fb7185)}.signal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0 0 18px}.signal-card{border:1px solid var(--bd);background:rgba(255,255,255,.03);border-radius:18px;padding:14px}.signal-card small{display:block;color:var(--tx3);font-weight:900;text-transform:uppercase;font-size:11px;letter-spacing:.08em}.signal-card b{font-size:22px}.signal-card span{display:block;color:var(--tx2);font-size:12px;margin-top:4px}@media(max-width:1200px){.dashboard-viz-grid,.donut-wrap{grid-template-columns:1fr}.signal-grid{grid-template-columns:repeat(2,1fr)}}
 
-.arch-toolbar{display:grid;grid-template-columns:160px minmax(220px,1fr) minmax(220px,1fr) auto;gap:10px;align-items:end;margin-bottom:14px}.arch-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}.arch-tab{border:1px solid var(--bd2);background:rgba(255,255,255,.04);color:var(--tx2);border-radius:999px;padding:8px 12px;font-weight:900;cursor:pointer}.arch-tab.active,.arch-tab:hover{color:#fff;border-color:rgba(168,85,247,.7);background:linear-gradient(135deg,rgba(90,94,247,.28),rgba(236,72,153,.18))}.arch-panel{display:none}.arch-panel.active{display:block}.arch-canvas{min-height:520px;border:1px solid rgba(124,58,237,.25);border-radius:20px;background:radial-gradient(circle at 12% 10%,rgba(124,58,237,.18),transparent 28%),linear-gradient(180deg,rgba(15,23,42,.52),rgba(15,15,30,.72));overflow:auto;position:relative}.arch-svg{min-width:860px;width:100%;display:block}.arch-node{filter:drop-shadow(0 8px 18px rgba(0,0,0,.38));cursor:pointer}.arch-node rect{transition:filter .15s}.arch-node:hover rect{filter:brightness(1.35)}.arch-node text{font-family:inherit}.arch-edge{fill:none;stroke:rgba(167,139,250,.6);stroke-width:2;}.arch-edge.error{stroke:rgba(244,63,94,.82);stroke-width:2.6}.arch-tier-label{fill:rgba(226,232,240,.5);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.09em;font-family:inherit}.trace-waterfall{display:grid;gap:10px}.trace-card{border:1px solid var(--bd);background:rgba(255,255,255,.035);border-radius:16px;padding:12px}.trace-hop{display:grid;grid-template-columns:135px 190px 80px 1fr;gap:10px;border-top:1px solid rgba(255,255,255,.06);padding:8px 0;font-size:12px}.call-matrix{width:100%;border-collapse:collapse}.call-matrix th,.call-matrix td{padding:10px;border-bottom:1px solid var(--bd);text-align:left}.arch-tooltip{position:fixed;z-index:99999;pointer-events:none;display:none;max-width:340px;background:#0f1020;border:1px solid rgba(168,85,247,.45);border-radius:14px;padding:10px 12px;box-shadow:0 20px 60px rgba(0,0,0,.55);font-size:12px;color:var(--tx);white-space:pre-line}@media(max-width:1000px){.arch-toolbar{grid-template-columns:1fr}.trace-hop{grid-template-columns:1fr}.arch-svg{min-width:700px}}
+.arch-toolbar{display:grid;grid-template-columns:160px minmax(220px,1fr) minmax(220px,1fr) auto;gap:10px;align-items:end;margin-bottom:14px}.arch-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}.arch-tab{border:1px solid var(--bd2);background:rgba(255,255,255,.04);color:var(--tx2);border-radius:999px;padding:8px 12px;font-weight:900;cursor:pointer}.arch-tab.active,.arch-tab:hover{color:#fff;border-color:rgba(168,85,247,.7);background:linear-gradient(135deg,rgba(90,94,247,.28),rgba(236,72,153,.18))}.arch-panel{display:none}.arch-panel.active{display:block}.arch-canvas{min-height:520px;border:1px solid rgba(124,58,237,.25);border-radius:20px;background:radial-gradient(circle at 12% 10%,rgba(124,58,237,.18),transparent 28%),linear-gradient(180deg,rgba(15,23,42,.52),rgba(15,15,30,.72));overflow:auto;position:relative}.arch-svg{min-width:860px;width:100%;display:block}.arch-node{filter:drop-shadow(0 8px 18px rgba(0,0,0,.38));cursor:pointer}.arch-node rect{transition:filter .15s}.arch-node:hover rect{filter:brightness(1.35)}.arch-node text{font-family:inherit}.arch-edge{fill:none;stroke:rgba(167,139,250,.6);stroke-width:2;}.arch-edge.error{stroke:rgba(244,63,94,.82);stroke-width:2.6}.arch-tier-label{fill:rgba(226,232,240,.5);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.09em;font-family:inherit}.trace-waterfall{display:grid;gap:10px}.trace-card{border:1px solid var(--bd);background:rgba(255,255,255,.035);border-radius:16px;padding:12px;cursor:pointer;transition:border-color .15s}.trace-card:hover{border-color:rgba(168,85,247,.55)}.trace-hop{display:grid;grid-template-columns:135px 190px 80px 1fr;gap:10px;border-top:1px solid rgba(255,255,255,.06);padding:8px 0;font-size:12px}.call-matrix{width:100%;border-collapse:collapse}.call-matrix th,.call-matrix td{padding:10px;border-bottom:1px solid var(--bd);text-align:left}.arch-tooltip{position:fixed;z-index:99999;pointer-events:none;display:none;max-width:340px;background:#0f1020;border:1px solid rgba(168,85,247,.45);border-radius:14px;padding:10px 12px;box-shadow:0 20px 60px rgba(0,0,0,.55);font-size:12px;color:var(--tx);white-space:pre-line}
+/* Waterfall modal enhancements */
+.wf-hop{display:grid;grid-template-columns:160px 200px 72px 1fr;gap:12px;border-top:1px solid rgba(255,255,255,.06);padding:10px 0;font-size:12px;align-items:start}.wf-hop:first-child{border-top:0}.wf-bar-wrap{height:6px;background:rgba(255,255,255,.06);border-radius:99px;margin-top:4px;overflow:hidden}.wf-bar{height:100%;border-radius:99px;background:linear-gradient(90deg,#818cf8,#a78bfa)}.wf-bar.err{background:linear-gradient(90deg,#ef4444,#fb7185)}.wf-kpi-tile{background:rgba(255,255,255,.04);border:1px solid var(--bd);border-radius:14px;padding:12px}.wf-kpi-tile small{display:block;color:var(--tx3);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.wf-kpi-tile b{display:block;font-size:22px;margin-top:4px}
+@media(max-width:1000px){.arch-toolbar{grid-template-columns:1fr}.trace-hop,.wf-hop{grid-template-columns:1fr}.arch-svg{min-width:700px}}
 </style>
 <div id="shell" class="app-shell"><aside class="sidebar"><button class="btn btn-ghost sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar / icon mode">☰</button><div class="brand"><div class="brand-logo" style="font-weight:900">OX</div><div><div class="brand-name">ObserveX</div><div class="brand-sub">Log Intelligence</div></div></div><div class="nav-section">Operate</div><a class="nav-link active" data-title="Dashboard" onclick="showSection('dashboard',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="15" width="7" height="6"/></svg></span><span class="nav-text">Dashboard</span></a><a class="nav-link" data-title="Log Search" onclick="showSection('logs',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span><span class="nav-text">Log Search</span></a><a class="nav-link" data-title="System Map" onclick="showSection('flow',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.7 10.8 15.4 7.2M8.7 13.2l6.7 3.6"/></svg></span><span class="nav-text">System Map</span></a><a class="nav-link" onclick="showSection('compare',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 17h4l2-10 4 10 2-6h4"/><path d="M4 21h16"/></svg></span><span class="nav-text">Change Impact</span></a><div class="nav-section">Reliability</div><a class="nav-link" onclick="showSection('onboarding',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 8a5 5 0 0 1 10 0"/><path d="M7 16a5 5 0 0 0 10 0"/></svg></span><span class="nav-text">Onboarding</span></a><a class="nav-link" onclick="showSection('health',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-5"/></svg></span><span class="nav-text">Source Health</span></a><a class="nav-link" onclick="showSection('performance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span><span class="nav-text">Performance</span></a><a class="nav-link" onclick="showSection('customdash',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15v2M12 11v6M17 8v9"/></svg></span><span class="nav-text">Custom Dashboards</span></a><a class="nav-link" onclick="showSection('incidents',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10.3 3.7 2.6 18a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></span><span class="nav-text">Incidents</span></a><a class="nav-link" onclick="showSection('metrics',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="5"/><rect x="12" y="7" width="3" height="9"/><rect x="17" y="9" width="3" height="7"/></svg></span><span class="nav-text">Log Metrics</span></a><div class="nav-section">Setup</div><a class="nav-link" onclick="showSection('api',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span><span class="nav-text">API Ingestion</span></a><a class="nav-link" onclick="showSection('alerts',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><span class="nav-text">Alerts</span></a><a class="nav-link" onclick="showSection('connectors',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-text">Connectors</span></a><a class="nav-link" onclick="showSection('marketplace',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 9h18l-1 12H4L3 9Z"/><path d="M8 9V6a4 4 0 0 1 8 0v3"/></svg></span><span class="nav-text">Marketplace</span></a><a class="nav-link" onclick="showSection('billing',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg></span><span class="nav-text">Billing & Usage</span></a><a class="nav-link" onclick="showSection('compliance',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Z"/><path d="m9.5 12.5 1.8 1.8 3.7-4"/></svg></span><span class="nav-text">Compliance</span></a><a class="nav-link" onclick="showSection('history',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span><span class="nav-text">Upload History</span></a><a class="nav-link" data-title="Settings" onclick="showSection('settings',event)"><span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1 1.64V21a2 2 0 1 1-4 0v-.08a1.8 1.8 0 0 0-1-1.64 1.8 1.8 0 0 0-2 .36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.64-1H3a2 2 0 1 1 0-4h.08a1.8 1.8 0 0 0 1.64-1 1.8 1.8 0 0 0-.36-2l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05a1.8 1.8 0 0 0 2 .36H9.3A1.8 1.8 0 0 0 10 2.08V2a2 2 0 1 1 4 0v.08a1.8 1.8 0 0 0 1 1.64h.09a1.8 1.8 0 0 0 2-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 2v.09A1.8 1.8 0 0 0 20.92 10H21a2 2 0 1 1 0 4h-.08a1.8 1.8 0 0 0-1.52 1Z"/></svg></span><span class="nav-text">Settings</span></a><div class="sidebar-footer"><div class="user-chip"><div class="avatar">{{ user.name[0].upper() if user.name else "U" }}</div><div><div class="user-name">{{ user.name }}</div><a href="{{ url_for('logout') }}" style="font-size:11px;color:var(--tx3)">Sign out</a></div></div></div></aside><button class="sidebar-edge-toggle" onclick="toggleSidebar()" title="Collapse / expand sidebar">‹</button>
 <main class="main">
@@ -100,12 +103,59 @@ Railway volume: set OBSERVEX_DATA_DIR=/data and mount a volume at /data.</pre></
 
 <section id="sec-compliance" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">🛡 SaaS, Compliance & Cost Control</div><div class="page-sub">Tenant isolation, retention, audit trail, usage visibility, alert destinations, and storage strategy.</div></div><div class="system-grid"><div class="card"><h3>Workspace & Role</h3><div class="toolbar" style="margin-top:12px"><input id="workspace-name" class="input" placeholder="Workspace name"><select id="workspace-plan" class="select-styled"><option>starter</option><option>growth</option><option>business</option><option>enterprise</option></select><button class="btn btn-primary" onclick="saveSaasSettings()">Save</button></div><div id="workspace-info" class="node-card">Loading...</div></div><div class="card"><h3>Retention Policy</h3><div class="toolbar" style="margin-top:12px"><input id="retention-days" type="number" class="input" placeholder="30" min="1" max="3650"><label style="color:var(--tx2);font-size:12px"><input id="masked-only" type="checkbox" checked> Masked logs only</label><label style="color:var(--tx2);font-size:12px"><input id="encrypted-raw" type="checkbox"> Encrypted raw logs</label><button class="btn btn-ghost" onclick="applyRetention()">Apply Cleanup</button></div><div id="retention-info" class="node-card">Loading...</div></div><div class="card"><h3>Usage / Cost Control</h3><div id="usage-info">Loading...</div></div><div class="card"><h3>Alert Destinations</h3><div class="toolbar" style="margin-top:12px"><select id="dest-kind" class="select-styled"><option>email</option><option>slack</option><option>teams</option><option>webhook</option></select><input id="dest-target" class="input" placeholder="email, webhook URL, Slack/Teams URL"><button class="btn btn-primary" onclick="createDestination()">Add</button></div><div id="destinations-list" style="margin-top:12px">Loading...</div></div></div><div class="card" style="margin-top:14px"><h3>Audit Logs</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Target</th><th>IP</th></tr></thead><tbody id="audit-body"><tr><td colspan="4">Loading...</td></tr></tbody></table></div></div></section>
 <section id="sec-settings" class="section-panel" style="display:none"><div class="page-header"><div class="page-title">⚙ Settings</div><div class="page-sub">Manage environments. These values reflect in Dashboard and Log Search.</div></div><div class="card"><h3>Environments</h3><div class="toolbar" style="margin-top:12px"><input id="new-env" class="input" placeholder="Example: PERF, QA, CLIENT_A"><button class="btn btn-primary" onclick="addEnvironment()">Add Environment</button></div><div id="env-list" class="env-list"></div></div><div class="card" style="margin-top:14px"><h3>Plan & Role</h3><div class="node-card"><b>{{ workspace.plan if workspace else "starter" }}</b><div style="color:var(--tx2);font-size:12px">Workspace: {{ workspace.name if workspace else "Default" }} · Role: {{ role }}</div><div style="color:var(--tx3);font-size:12px">Limits: {{ limits.storage_gb }} GB storage · {{ limits.ingestion_gb_month }} GB/month ingestion · {{ limits.users }} users · {{ limits.retention_days }} days retention · {{ limits.alerts }} alerts</div></div></div>{% if role == "Admin" %}<div class="card" style="margin-top:14px"><h3>Admin Access</h3><p style="color:var(--tx2);font-size:13px">Only Admins can manage invite codes, roles, workspace plan, retention and destructive deletion.</p><div class="toolbar"><select id="invite-role" class="select-styled"><option>Developer</option><option>Viewer</option><option>Auditor</option><option>Admin</option></select><button class="btn btn-primary" onclick="createInvite()">Create Invite Code</button></div><div id="invite-list" class="env-list"></div><h3 style="margin-top:18px">Members</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead><tbody id="members-body"><tr><td colspan="3">Loading...</td></tr></tbody></table></div></div>{% endif %}<div class="card" style="margin-top:14px"><h3>Security & Masking</h3><p style="color:var(--tx2)">ObserveX masks JWTs, bearer tokens, API keys, Aadhaar, PAN, mobile numbers, emails, customer names, loan/account/customer/checkout IDs, BBPS IDs, UPI/VPA and common secrets before rendering logs, exporting CSV, storing volume copies, or returning API responses.</p><p style="color:var(--tx3);font-size:12px">For production SaaS: store only masked logs by default; allow encrypted raw retention only as an enterprise admin setting.</p></div></section>
+<!-- ── Missing section stubs (prevent showSection null-style crash) ──────── -->
+<section id="sec-onboarding" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">🚦 Onboarding</div><div class="page-sub">Quick-start guide for ingesting your first logs.</div></div>
+  <div class="card"><div id="onboarding-content" style="color:var(--tx2)">Loading onboarding guide…</div></div>
+</section>
+<section id="sec-health" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">🛡 Source Health</div><div class="page-sub">Live status of all connected log sources and connectors.</div></div>
+  <div class="card"><div id="source-health-content" style="color:var(--tx2)">Loading source health…</div></div>
+</section>
+<section id="sec-performance" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">⚡ Performance</div><div class="page-sub">Latency distributions, P95/P99 breakdowns and throughput trends.</div></div>
+  <div class="card"><div id="performance-content" style="color:var(--tx2)">Upload logs to render performance metrics.</div></div>
+</section>
+<section id="sec-customdash" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">📊 Custom Dashboards</div><div class="page-sub">Build and pin widget-based views for your team.</div></div>
+  <div class="card"><div id="widgets-content" style="color:var(--tx2)">Loading widgets…</div></div>
+</section>
+<section id="sec-incidents" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">🚨 Incidents</div><div class="page-sub">Open, acknowledged and resolved incidents derived from log signals.</div></div>
+  <div class="card"><div id="incidents-content" style="color:var(--tx2)">Loading incidents…</div></div>
+</section>
+<section id="sec-metrics" class="section-panel" style="display:none">
+  <div class="page-header"><div class="page-title">📈 Log Metrics</div><div class="page-sub">Aggregated counters and rates computed from ingested log data.</div></div>
+  <div class="card"><div id="metrics-content" style="color:var(--tx2)">Loading log metrics…</div></div>
+</section>
 </main></div>
+
+<!-- ── Log detail modal ──────────────────────────────────────────────────── -->
 <div id="log-modal" class="modal"><div class="modal-card"><div style="display:flex;justify-content:space-between;gap:10px"><h2>Complete Log Detail</h2><div><button class="btn btn-ghost btn-sm" onclick="copyCurrentLog()">Copy Full Log</button><button class="btn btn-danger btn-sm" onclick="closeLogModal()">Close</button></div></div><div id="log-detail"></div></div></div>
+
+<!-- ── Trace Waterfall popup modal ───────────────────────────────────────── -->
+<div id="waterfall-modal" class="modal" onclick="if(event.target===this)closeWaterfallModal()">
+  <div class="modal-card" style="width:min(1000px,96vw);max-height:90vh">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px">
+      <div>
+        <h2 style="margin:0">🔁 Trace Waterfall</h2>
+        <div id="wf-subtitle" style="color:var(--tx3);font-size:13px;margin-top:2px">Per-hop service call breakdown</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="copyWaterfall()">Copy</button>
+        <button class="btn btn-danger btn-sm" onclick="closeWaterfallModal()">Close ✕</button>
+      </div>
+    </div>
+    <!-- KPI strip -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px" id="wf-kpis"></div>
+    <!-- Trace cards -->
+    <div id="wf-body" style="overflow-y:auto;max-height:65vh;display:grid;gap:12px"></div>
+  </div>
+</div>
 <script>
 let _allRows=[],_visibleRows=[],_lastResult=null,_sessions=[],_environments={{ environments|tojson }};
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const badge=l=>l==='ERROR'||l==='FAILURE'?'badge-error':l==='WARN'?'badge-warn':l==='SUCCESS'?'badge-ok':'badge-info';
-function toggleSidebar(){let s=document.getElementById('shell');s.classList.toggle('collapsed');localStorage.setItem('observexSidebarCollapsed',s.classList.contains('collapsed')?'1':'0')}function showSection(name,ev){document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');document.getElementById('sec-'+name).style.display='block';document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));if(ev?.currentTarget)ev.currentTarget.classList.add('active');if(name==='history')loadHistory();if(name==='flow'){renderFlow();loadSystemMap();}if(name==='compliance')loadCompliance();if(name==='connectors')loadConnectors();if(name==='api')loadApiDocs();if(name==='onboarding')loadOnboarding();if(name==='health')loadSourceHealth();if(name==='performance')loadPerformance();if(name==='customdash')loadWidgets();if(name==='incidents')loadIncidents();if(name==='metrics')loadLogMetrics();if(name==='marketplace')loadMarketplace();if(name==='billing')loadBilling();if(name==='settings'){loadInvites();loadMembers();}}function switchTab(id,btn){document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.parentElement.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
+function toggleSidebar(){let s=document.getElementById('shell');s.classList.toggle('collapsed');localStorage.setItem('observexSidebarCollapsed',s.classList.contains('collapsed')?'1':'0')}function switchTab(id,btn){document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.parentElement.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
 async function safeJson(res){let d=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(d.error||'Request failed');return d}
 const dz=document.getElementById('drop-zone');['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>uploadFiles([...e.dataTransfer.files]));document.getElementById('fileInput').addEventListener('change',e=>uploadFiles([...e.target.files]));
 async function uploadFiles(files){if(!files.length)return;let total=files.reduce((a,f)=>a+f.size,0),done=0;document.getElementById('upload-status').textContent=`Uploading ${files.length} file(s)…`;for(const file of files){const fd=new FormData();fd.append('env',document.getElementById('env').value);fd.append('logfile',file);try{let d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));addSession(d,file.name,file.size)}catch(e){alert(file.name+': '+e.message)}done+=file.size;document.getElementById('upload-progress').style.width=Math.round(done/total*100)+'%'}document.getElementById('upload-status').textContent='Upload complete. Active dataset contains '+_allRows.length+' parsed log record(s).'}
@@ -271,10 +321,133 @@ function renderArchitectureSvg(ep){
   document.getElementById('flow-diagram').innerHTML=`<svg class="arch-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMin meet" style="height:${H}px">${defs}${dividers}${labels}${edgeSvg}${nodeSvg}</svg>`;
   bindArchTooltips();
 }
-function renderTraceWaterfall(ep){let traces=(ep.architecture?.traces)||[];document.getElementById('arch-waterfall').innerHTML=traces.length?traces.map(t=>`<div class="trace-card"><b>${esc(t.trace)}</b><span style="float:right;color:${t.errors?'#fda4af':'#86efac'}">${t.errors||0} errors · ${t.latency||0}ms</span>${(t.rows||[]).slice(0,10).map(r=>`<div class="trace-hop"><span class="mono">${esc(r.time||'—')}</span><b>${esc(r.service||'—')}</b><span class="${/ERROR|FAILURE/.test(r.level)?'pill-error':''}">${esc(r.level||'')}</span><span class="mono">${esc(r.message||'')}</span></div>`).join('')}</div>`).join(''):'No trace waterfall detected for this endpoint.';}
+function renderTraceWaterfall(ep){
+  // Inline panel: just show clickable summary cards
+  let traces=(ep.architecture?.traces)||[];
+  let panel=document.getElementById('arch-waterfall');
+  if(!traces.length){panel.innerHTML='<div style="color:var(--tx3);padding:20px">No trace waterfall detected for this endpoint.</div>';return;}
+  panel.innerHTML=traces.map((t,idx)=>`
+    <div class="trace-card" onclick="openWaterfallModal(${idx})" title="Click to open full waterfall">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <b class="mono" style="font-size:13px">${esc(t.trace)}</b>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:${t.errors?'#fda4af':'#86efac'};font-size:12px;font-weight:700">${t.errors||0} errors · ${t.latency||0}ms</span>
+          <span style="font-size:11px;color:var(--tx3)">${(t.rows||[]).length} hops</span>
+          <span class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:11px">Open ↗</span>
+        </div>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        ${(t.rows||[]).slice(0,6).map(r=>`<span style="font-size:11px;background:${/ERROR|FAILURE/.test(r.level)?'rgba(244,63,94,.18)':'rgba(90,94,247,.14)'};border:1px solid ${/ERROR|FAILURE/.test(r.level)?'rgba(244,63,94,.35)':'rgba(167,139,250,.25)'};border-radius:999px;padding:3px 9px;color:var(--tx2)">${esc(r.service||'—')}</span>`).join('<span style="color:var(--tx3);align-self:center">→</span>')}
+      </div>
+    </div>`).join('');
+  // Store traces reference for modal
+  _currentWaterfallTraces = traces;
+  _currentWaterfallEndpoint = ep;
+}
+
+let _currentWaterfallTraces=[], _currentWaterfallEndpoint=null;
+
+function openWaterfallModal(idx){
+  const traces=_currentWaterfallTraces;
+  const ep=_currentWaterfallEndpoint||{};
+  if(!traces||!traces.length) return;
+
+  const t = idx!=null ? traces[idx] : traces[0];
+  const allTraces = traces;
+  const maxLat = Math.max(1, ...(t.rows||[]).map(r=>r.latency||0));
+
+  // Subtitle
+  document.getElementById('wf-subtitle').innerHTML=
+    `Endpoint: <code class="mono">${esc(ep.endpoint||ep.sample_trace||'—')}</code> · API: <b>${esc(ep.api_name||t.api||'—')}</b>`;
+
+  // KPI strip
+  const totalLat=(t.rows||[]).reduce((a,r)=>a+(r.latency||0),0);
+  document.getElementById('wf-kpis').innerHTML=`
+    <div class="wf-kpi-tile"><small>Trace ID</small><b class="mono" style="font-size:13px;word-break:break-all">${esc(t.trace).slice(0,28)}</b></div>
+    <div class="wf-kpi-tile"><small>Total Hops</small><b>${(t.rows||[]).length}</b></div>
+    <div class="wf-kpi-tile"><small>Errors</small><b class="${t.errors?'pill-error':''}">${t.errors||0}</b></div>
+    <div class="wf-kpi-tile"><small>Max Latency</small><b>${t.latency||0}ms</b></div>`;
+
+  // Trace selector tabs if multiple traces
+  let selector='';
+  if(allTraces.length>1){
+    selector=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      ${allTraces.map((tr,i)=>`<button onclick="openWaterfallModal(${i})" class="btn btn-ghost btn-sm${i===idx?' btn-primary':''}" style="font-size:11px">${esc(tr.trace).slice(0,20)}${tr.errors?` ⚠ ${tr.errors}`:''}  </button>`).join('')}
+    </div>`;
+  }
+
+  // Hop rows with latency bar
+  const hops=(t.rows||[]).map(r=>{
+    const barW=maxLat>0?Math.round((r.latency||0)/maxLat*100):0;
+    const isErr=/ERROR|FAILURE/.test(r.level||'');
+    return `<div class="wf-hop">
+      <span class="mono" style="color:var(--tx3)">${esc(r.time||'—')}</span>
+      <div>
+        <b style="font-size:12px">${esc(r.service||'—')}</b>
+        <div class="wf-bar-wrap"><div class="wf-bar${isErr?' err':''}" style="width:${barW}%"></div></div>
+        <span style="font-size:10px;color:var(--tx3)">${r.latency||0}ms</span>
+      </div>
+      <span class="badge ${badge(r.level||'')}" style="align-self:start">${esc(r.level||'—')}</span>
+      <span class="mono" style="font-size:11px;color:var(--tx2);word-break:break-word">${esc(r.message||'').slice(0,320)}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('wf-body').innerHTML=selector+`
+    <div style="border:1px solid var(--bd);border-radius:16px;overflow:hidden">
+      <div class="wf-hop" style="border-top:0;background:rgba(255,255,255,.04);padding:10px;font-size:11px;font-weight:900;text-transform:uppercase;color:var(--tx3);letter-spacing:.06em">
+        <span>Timestamp</span><span>Service</span><span>Level</span><span>Message</span>
+      </div>
+      ${hops||'<div style="padding:16px;color:var(--tx3)">No hop data</div>'}
+    </div>`;
+
+  document.getElementById('waterfall-modal').classList.add('active');
+}
+
+function closeWaterfallModal(){document.getElementById('waterfall-modal').classList.remove('active');}
+function copyWaterfall(){
+  const t=_currentWaterfallTraces[0];if(!t)return;
+  const text='Trace: '+t.trace+'\nErrors: '+t.errors+'\nMax latency: '+t.latency+'ms\n\n'+
+    (t.rows||[]).map(r=>`${r.time||''} [${r.level}] ${r.service} ${r.latency||0}ms\n  ${r.message||''}`).join('\n');
+  navigator.clipboard.writeText(text);alert('Waterfall copied');
+}
 function renderCallMatrix(ep){let rows=(ep.architecture?.matrix)||[];document.getElementById('arch-matrix').innerHTML=rows.length?`<div class="table-wrap"><table class="call-matrix"><thead><tr><th>From</th><th>To</th><th>Calls</th><th>Errors</th><th>Error %</th><th>Avg Latency</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${r.calls}</td><td class="${r.errors?'pill-error':''}">${r.errors}</td><td>${r.error_rate}%</td><td>${r.avg_latency_ms}ms</td></tr>`).join('')}</tbody></table></div>`:'No service call matrix detected.';}
 function bindArchTooltips(){let tip=document.getElementById('arch-tooltip');document.querySelectorAll('[data-tip]').forEach(el=>{el.onmousemove=e=>{tip.style.display='block';tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY+14)+'px';tip.innerHTML=el.getAttribute('data-tip');};el.onmouseleave=()=>tip.style.display='none';});}
-function generateReport(){let d=_lastResult;if(!d)return;document.getElementById('rca-report').textContent=`ObserveX RCA\nFiles: ${_sessions.map(s=>s.name).join(', ')||'N/A'}\nRoot cause: ${d.root_cause}\nApps: ${(d.apps||[]).join(', ')||'N/A'}\nLines: ${d.total}\nErrors: ${d.errors}\nWarnings: ${d.warns}\nAvg latency: ${d.latency}ms\nHealth: ${Math.round(d.health_score)}/100\nDecision: ${d.deploy_summary?.recommendation||''}\nNext steps:\n- ${(d.suggestions||[]).join('\n- ')}`}function copyReport(){generateReport();navigator.clipboard.writeText(document.getElementById('rca-report')?.textContent||'');alert('Report copied')}async function exportCsv(){let res=await fetch('/export/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:_visibleRows||[]})});let blob=await res.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='observex-log-export.csv';a.click()}function copyKey(){navigator.clipboard.writeText(document.getElementById('api-key-display').textContent.trim());alert('Dummy API header copied')}async function loadApiDocs(){let d=await safeJson(await fetch('/api/docs'));document.getElementById('api-docs-json').textContent=JSON.stringify(d,null,2)}
+function generateReport(){let d=_lastResult;if(!d)return;document.getElementById('rca-report').textContent=`ObserveX RCA\nFiles: ${_sessions.map(s=>s.name).join(', ')||'N/A'}\nRoot cause: ${d.root_cause}\nApps: ${(d.apps||[]).join(', ')||'N/A'}\nLines: ${d.total}\nErrors: ${d.errors}\nWarnings: ${d.warns}\nAvg latency: ${d.latency}ms\nHealth: ${Math.round(d.health_score)}/100\nDecision: ${d.deploy_summary?.recommendation||''}\nNext steps:\n- ${(d.suggestions||[]).join('\n- ')}`}
+function copyReport(){generateReport();navigator.clipboard.writeText(document.getElementById('rca-report')?.textContent||'');alert('Report copied')}
+async function exportCsv(){let res=await fetch('/export/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:_visibleRows||[]})});let blob=await res.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='observex-log-export.csv';a.click()}
+function copyKey(){navigator.clipboard.writeText(document.getElementById('api-key-display').textContent.trim());alert('Dummy API header copied')}
+async function loadApiDocs(){let d=await safeJson(await fetch('/api/docs'));document.getElementById('api-docs-json').textContent=JSON.stringify(d,null,2)}
+
+// ── showSection: guard against missing section IDs ────────────────────────
+function showSection(name,ev){
+  document.querySelectorAll('.section-panel').forEach(s=>s.style.display='none');
+  const el=document.getElementById('sec-'+name);
+  if(el) el.style.display='block';
+  document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
+  if(ev?.currentTarget) ev.currentTarget.classList.add('active');
+  if(name==='history')   loadHistory();
+  if(name==='flow')      {renderFlow();loadSystemMap();}
+  if(name==='compliance')loadCompliance();
+  if(name==='connectors')loadConnectors();
+  if(name==='api')       loadApiDocs();
+  if(name==='onboarding')loadOnboarding();
+  if(name==='health')    loadSourceHealth();
+  if(name==='performance')loadPerformance();
+  if(name==='customdash')loadWidgets();
+  if(name==='incidents') loadIncidents();
+  if(name==='metrics')   loadLogMetrics();
+  if(name==='marketplace')loadMarketplace();
+  if(name==='billing')   loadBilling();
+  if(name==='settings')  {loadInvites();loadMembers();}
+}
+
+// ── Stub functions for sections not yet fully implemented ─────────────────
+function loadOnboarding(){const el=document.getElementById('onboarding-content');if(el)el.innerHTML=`<div class="insight"><h3>Quick Start</h3><ol style="color:var(--tx2);margin-top:10px;line-height:2"><li>Upload a <code>.log</code> or <code>.txt</code> file from the Dashboard tab</li><li>Browse parsed logs in <b>Log Search</b></li><li>Explore the service topology in <b>System Map</b></li><li>Set up ingestion from CI/CD or MuleSoft via <b>API Ingestion</b></li></ol></div>`;}
+function loadSourceHealth(){const el=document.getElementById('source-health-content');if(el)el.innerHTML=_sessions.length?_sessions.map(s=>`<div class="node-card"><b>${esc(s.name)}</b><div style="color:var(--tx2);font-size:12px">${Math.round((s.size||0)/1024)} KB · ${(s.result?.log_rows||[]).length} rows · ${(s.result?.log_rows||[]).filter(r=>r.level==='ERROR').length} errors</div></div>`).join(''):'<div style="color:var(--tx3)">No active sources. Upload logs on the Dashboard.</div>';}
+function loadPerformance(){const el=document.getElementById('performance-content');if(!el)return;const lats=_allRows.map(r=>Number(r.latency||0)).filter(Boolean).sort((a,b)=>a-b);if(!lats.length){el.innerHTML='<div style="color:var(--tx3)">No latency data detected yet. Upload logs with duration/latency fields.</div>';return;}const p50=lats[Math.floor(lats.length*.5)]||0,p95=lats[Math.floor(lats.length*.95)]||0,p99=lats[Math.floor(lats.length*.99)]||0,avg=Math.round(lats.reduce((a,b)=>a+b,0)/lats.length);el.innerHTML=`<div class="lite-grid" style="grid-template-columns:repeat(4,1fr)"><div class="kpi"><b>${avg}ms</b><span>Avg</span></div><div class="kpi"><b>${p50}ms</b><span>P50</span></div><div class="kpi"><b class="${p95>3000?'pill-error':p95>1000?'pill-warn':''}">${p95}ms</b><span>P95</span></div><div class="kpi"><b class="${p99>5000?'pill-error':''}">${p99}ms</b><span>P99</span></div></div>`;}
+function loadWidgets(){const el=document.getElementById('widgets-content');if(el)el.innerHTML='<div style="color:var(--tx3)">Custom widget builder coming soon. Use the Dashboard for built-in charts.</div>';}
+function loadIncidents(){const el=document.getElementById('incidents-content');if(!el)return;const errs=_allRows.filter(r=>r.level==='ERROR'||r.level==='FAILURE');if(!errs.length){el.innerHTML='<div style="color:var(--tx3)">No incidents detected. Upload logs with ERROR or FAILURE records.</div>';return;}const groups={};errs.forEach(r=>{const k=(r.message.match(/(?:Exception|ERROR|failed)[:\s]+([A-Za-z0-9_.:-]+)/i)||[])[1]||'General error';groups[k]??={count:0,first:r.time,last:r.time,app:r.app};groups[k].count++;groups[k].last=r.time;});el.innerHTML='<div class="table-wrap"><table><thead><tr><th>Error cluster</th><th>App</th><th>Count</th><th>First seen</th><th>Last seen</th><th>Status</th></tr></thead><tbody>'+Object.entries(groups).sort((a,b)=>b[1].count-a[1].count).map(([k,v])=>`<tr><td><b>${esc(k)}</b></td><td>${esc(v.app)}</td><td class="pill-error">${v.count}</td><td class="mono" style="font-size:11px">${esc(v.first)}</td><td class="mono" style="font-size:11px">${esc(v.last)}</td><td><span class="status-pill status-open">OPEN</span></td></tr>`).join('')+'</tbody></table></div>';}
+function loadLogMetrics(){const el=document.getElementById('metrics-content');if(!el)return;if(!_allRows.length){el.innerHTML='<div style="color:var(--tx3)">No data. Upload logs first.</div>';return;}const apps=[...new Set(_allRows.map(r=>r.app).filter(Boolean))];el.innerHTML='<div class="table-wrap"><table><thead><tr><th>App</th><th>Total</th><th>Errors</th><th>Warnings</th><th>Error %</th><th>Avg Latency</th></tr></thead><tbody>'+apps.map(a=>{const rows=_allRows.filter(r=>r.app===a);const errs=rows.filter(r=>r.level==='ERROR'||r.level==='FAILURE').length;const warns=rows.filter(r=>r.level==='WARN').length;const lats=rows.map(r=>Number(r.latency||0)).filter(Boolean);const avg=lats.length?Math.round(lats.reduce((x,y)=>x+y,0)/lats.length):0;return`<tr><td><b>${esc(a)}</b></td><td>${rows.length}</td><td class="${errs?'pill-error':''}">${errs}</td><td class="${warns?'pill-warn':''}">${warns}</td><td>${rows.length?Math.round(errs/rows.length*100):0}%</td><td>${avg}ms</td></tr>`;}).join('')+'</tbody></table></div>';}
 async function createAlert(){let name=document.getElementById('alert-env').value+' - '+(document.getElementById('alert-name').value||'Alert'),condition=document.getElementById('alert-cond').value,threshold=Number(document.getElementById('alert-threshold').value||0);await safeJson(await fetch('/alerts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,condition,threshold})}));alert('Alert created')}async function loadHistory(){
   let rows=await safeJson(await fetch('/history'));
   if(!Array.isArray(rows)){document.getElementById('history-body').innerHTML='<tr><td colspan="9">Error loading history.</td></tr>';return;}
