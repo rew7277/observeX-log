@@ -1332,53 +1332,57 @@ def _meaningful_flow_name(name: str) -> str:
     return n
 
 def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) -> list:
-    """Build a readable API -> flow/subflow -> outbound call -> response sequence."""
+    """Build a readable API -> business flow -> outbound call -> external dependency -> response sequence."""
     api = _clean_service_name(api_name) or 'Application'
     steps = []
+    generic = {'client','common','default','logging','logger','log','logs','mule-subflow','mule-flow','external-service','service','flow','processor','response','subflow','mule-api','jwt-validation','api-router','processing','before-request','after-response'}
+    def clean_step(x):
+        n = _meaningful_flow_name(x)
+        if not n or _looks_like_processor_event_name(n) or n.lower() in generic:
+            return ''
+        return n
     def add(x):
-        x = _meaningful_flow_name(x)
-        if not x:
-            return
-        if x.lower() == api.lower() and steps:
-            return
-        if not any(y.lower() == x.lower() for y in steps):
-            steps.append(x)
-    add(api)
+        n = clean_step(x)
+        if not n: return
+        if n.lower() == api.lower() and steps: return
+        if not any(y.lower() == n.lower() for y in steps): steps.append(n)
+    if api and api.lower() not in {'unknown-api','application'}:
+        steps.append(api)
     proc_re_local = re.compile(r'\[processor:\s*([^;\]]+)', re.I)
     flow_re_local = re.compile(r'(?:flow(?:Name)?|subflow|route)\s*[=:]\s*["\']?([A-Za-z0-9_][A-Za-z0-9_.:-]{2,80})', re.I)
     outbound_seen = False
-    for r in (rows or [])[:1200]:
+    external_candidates = []
+    for r in (rows or [])[:1800]:
         msg = str(r.get('message') or '')
-        for m in proc_re_local.finditer(msg):
-            add(m.group(1))
-        for m in flow_re_local.finditer(msg):
-            add(m.group(1))
-        if re.search(r'\b(?:before|after)\s+request\s+to\b|\b(?:calling|request to|invoking)\b', msg, re.I):
-            outbound_seen = True
-            add('make-api-call')
-        for key in ('make-api-call','mandateStatusCallBack-sub-flow','mandate-status-callback-sub-flow'):
-            if key.lower() in msg.lower():
-                add(key)
-    if len(steps) <= 1 and arch:
-        for item in arch.get('simple_flow', []) or []:
-            add(item)
-        for n in arch.get('nodes', []):
-            nm = n.get('name') if isinstance(n, dict) else str(n)
-            add(nm)
+        for m in proc_re_local.finditer(msg): add(m.group(1))
+        for m in flow_re_local.finditer(msg): add(m.group(1))
+        for key in ('create-emandate-sub-flow','mandateStatusCallBack-sub-flow','mandate-status-callback-sub-flow','make-api-call'):
+            if key.lower() in msg.lower(): add(key)
+        if re.search(r'\b(?:before|after)\s+request\s+to\b|\b(?:calling|request to|invoking|http request|soap request)\b', msg, re.I):
+            outbound_seen = True; add('make-api-call')
+        dm = re.search(r'(?:request to|calling|invoking)\s+([A-Za-z][A-Za-z0-9_.-]{2,80})', msg, re.I)
+        if dm:
+            d = _clean_service_name(dm.group(1))
+            if d and d.lower() not in generic and 'logger' not in d.lower(): external_candidates.append(d)
+    if arch:
+        for n in arch.get('nodes', []) or []:
+            nm = n.get('name') if isinstance(n, dict) else str(n); add(nm)
+        for item in arch.get('simple_flow', []) or []: add(item)
     business = [x for x in steps if not re.search(r'(^|-)entry-logger-flow$|(^|-)exit-logger-flow$', x, re.I)]
-    if len(business) >= 2:
-        steps = business
+    if len(business) >= 2: steps = business
     lows = [x.lower() for x in steps]
-    if outbound_seen and 'make-api-call' in lows and not any(('external' in x or 'flexcube' in x or 'vendor' in x) for x in lows):
-        idx = lows.index('make-api-call') + 1
-        steps.insert(idx, 'External-System')
-    if not any(x.lower() == 'response' for x in steps):
-        steps.append('Response')
+    if ('make-api-call' in lows or outbound_seen) and not any(('external' in x or 'flexcube' in x or 'vendor' in x or 'bank' in x) for x in lows):
+        insert_after = lows.index('make-api-call') + 1 if 'make-api-call' in lows else len(steps)
+        dep = external_candidates[0] if external_candidates else 'External-System'
+        if not any(x.lower() == dep.lower() for x in steps): steps.insert(insert_after, dep)
+    if not any(x.lower() == 'response' for x in steps): steps.append('Response')
     final = []
     for x in steps:
-        if x and not any(y.lower() == x.lower() for y in final):
-            final.append(x)
-    return final[:10]
+        if not x: continue
+        low = x.lower()
+        if low in {'common','default','logging','logger','mule-subflow','external-service','subflow','mule-api','jwt-validation','api-router'}: continue
+        if not any(y.lower() == low for y in final): final.append(x)
+    return final[:8]
 
 def _synthetic_trace_and_matrix(flow: list, req_count: int = 0, err_count: int = 0, avg_latency: int = 0) -> tuple:
     """Create useful waterfall/matrix data from a clean flow when logs lack distributed trace spans."""
@@ -2033,7 +2037,7 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
         traces=sorted(trace_map.values(), key=lambda t:(-t["errors"], -len(t["rows"])))[:12]
         return {
             "nodes": nodes, "edges": edges, "traces": traces, "matrix": matrix, "tiers": tiers,
-            "simple_flow": ["Client", "Mule API", "JWT Validation", "API Router", "Subflow", "External Service", "Logging", "Response"],
+            "simple_flow": _build_clean_execution_flow(api_name or api or "Mule API", mule_rows, {"nodes": list(node_map.values())}),
             "hints": [
                 "Mule logger messages are treated as stages, not architecture services.",
                 "processors/1 is interpreted as before/downstream request; processors/3 as after/response logging.",
