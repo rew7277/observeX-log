@@ -1445,6 +1445,116 @@ def send_reset_email(user):
     except Exception:
         return False
 
+
+# ── Clean Mule architecture override ─────────────────────────────────────────
+# This override intentionally abstracts logger lines into an understandable,
+# architecture-level flow. It prevents phrases like "before loan details log"
+# and "after loan details log" from becoming fake services in System Map.
+def _mule_row_parts(row):
+    msg = row.get("message", "") or ""
+    api = row.get("app") or "unknown-api"
+    method = ""
+    endpoint = ""
+    m = re.search(r"\[([^\]]+)\]\.(get|post|put|delete|patch):\\([^:]+)", msg, re.I)
+    if m:
+        api = _clean_service_name(m.group(1))
+        method = m.group(2).upper()
+        endpoint = "/" + m.group(3).strip("\\/").replace("\\", "/")
+    flow = row.get("flow") or ""
+    fm = re.search(r"processor:\s*([^;/\]]+)", msg, re.I)
+    if fm:
+        flow = _clean_service_name(fm.group(1))
+    step = 0
+    sm = re.search(r"processors/(\d+)", msg, re.I)
+    if sm:
+        step = int(sm.group(1))
+    stage = "After Response" if re.search(r"\bafter\b", msg, re.I) else "Before Request" if re.search(r"\bbefore\b", msg, re.I) else "Processing"
+    return api, method, endpoint, flow, step, stage
+
+def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = '', endpoint: str = '') -> dict:
+    mule_rows = [r for r in (rows or []) if "MuleRuntime" in (r.get("message","") or "") or "processor:" in (r.get("message","") or "")]
+    if mule_rows:
+        node_map, edge_map, trace_map = {}, {}, {}
+        def add_node(name, tier, row=None):
+            name = _clean_service_name(name or "")
+            if not name: return ""
+            n = node_map.setdefault(name, {"id":name,"name":name,"tier":tier,"count":0,"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"})
+            n["count"] += 1
+            if row:
+                lvl = str(row.get("level","")).upper()
+                n["errors"] += 1 if lvl in ("ERROR","FAILURE") else 0
+                n["warns"] += 1 if lvl == "WARN" else 0
+                n["health"] = "critical" if n["errors"] else "warn" if n["warns"] else "ok"
+            return name
+        def add_edge(a,b,row=None,label="calls"):
+            a=add_node(a, "Client" if a=="Client" else "Service", row if a!="Client" else None)
+            b=add_node(b, "Client" if b=="Response" else "Service", row if b!="Response" else None)
+            if not a or not b or a==b: return
+            e=edge_map.setdefault((a,b), {"from":a,"to":b,"count":0,"errors":0,"avg_latency_ms":0,"label":label})
+            e["count"] += 1
+            if row and str(row.get("level","")).upper() in ("ERROR","FAILURE"):
+                e["errors"] += 1
+        # group by api/endpoint/flow to build a clean flow instead of log text
+        for r in mule_rows:
+            api, method, ep, flow, step, stage = _mule_row_parts(r)
+            api = api_name or api or "Mule API"
+            ep = endpoint or ep or _normalise_endpoint(r.get("endpoint","") or "")
+            flow = flow or "Mule Subflow"
+            add_node("Client","Client")
+            add_node(api,"API",r)
+            add_node("JWT Validation","Gateway",r)
+            add_node("API Router","Gateway",r)
+            add_node(flow,"Service",r)
+            add_node("External Service","External",r)
+            add_node("Logging","Service",r)
+            add_node("Response","Client")
+            add_edge("Client", api, r, "request")
+            add_edge(api, "JWT Validation", r, "validates")
+            add_edge("JWT Validation", "API Router", r, "routes")
+            add_edge("API Router", flow, r, method or "calls")
+            # processors/1 is usually before external/downstream; processors/3 after response/logging
+            if step <= 1 or stage == "Before Request":
+                add_edge(flow, "External Service", r, "downstream")
+            else:
+                add_edge("External Service", flow, r, "returns")
+                add_edge(flow, "Logging", r, "logs")
+            add_edge("Logging", "Response", r, "returns")
+            trace = r.get("trace") or r.get("event") or ""
+            if trace:
+                tr = trace_map.setdefault(trace, {"trace":trace,"api":api,"endpoint":ep,"rows":[],"errors":0,"latency":0})
+                tr["rows"].append({"time":r.get("time",""),"service":flow,"stage":stage,"level":r.get("level",""),"message":(r.get("message","") or "")[:260],"latency":int(r.get("latency") or 0)})
+                tr["errors"] += 1 if str(r.get("level","")).upper() in ("ERROR","FAILURE") else 0
+        nodes=list(node_map.values())
+        tiers=["Client","Gateway","API","Service","External"]
+        for e in edge_map.values():
+            e["error_rate"] = round(e["errors"]/max(1,e["count"])*100,1)
+        edges=sorted(edge_map.values(), key=lambda e:-e["count"])
+        matrix=[{"from":e["from"],"to":e["to"],"calls":e["count"],"errors":e["errors"],"avg_latency_ms":0,"error_rate":e["error_rate"]} for e in edges]
+        traces=sorted(trace_map.values(), key=lambda t:(-t["errors"], -len(t["rows"])))[:12]
+        return {
+            "nodes": nodes, "edges": edges, "traces": traces, "matrix": matrix, "tiers": tiers,
+            "simple_flow": ["Client", "Mule API", "JWT Validation", "API Router", "Subflow", "External Service", "Logging", "Response"],
+            "hints": [
+                "Mule logger messages are treated as stages, not architecture services.",
+                "processors/1 is interpreted as before/downstream request; processors/3 as after/response logging.",
+                "For exact external service names, add logs like 'before request to CustomerService' or a JSON field target/service."
+            ]
+        }
+    # Non-Mule fallback: keep existing generic topology but avoid raw before/after logger phrases.
+    return {
+        "nodes": [
+            {"id":"Client","name":"Client","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"},
+            {"id":api_name or "Application","name":api_name or "Application","tier":"API","count":len(rows or []),"errors":sum(1 for r in rows or [] if r.get("level") in ("ERROR","FAILURE")),"warns":0,"avg_latency_ms":0,"health":"ok"},
+            {"id":"Response","name":"Response","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"}
+        ],
+        "edges": [
+            {"from":"Client","to":api_name or "Application","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"request","error_rate":0},
+            {"from":api_name or "Application","to":"Response","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"returns","error_rate":0}
+        ],
+        "traces": [], "matrix": [], "tiers": ["Client","API"],
+        "simple_flow": ["Client", api_name or "Application", "Response"]
+    }
+
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
