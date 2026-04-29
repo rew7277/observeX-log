@@ -368,6 +368,17 @@ class RetentionPolicy(db.Model):
     created_at         = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     updated_at         = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+class MaskingRule(db.Model):
+    """User-configurable masking rule used by Settings -> Security & Masking."""
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    field_name  = db.Column(db.String(120), nullable=False)
+    mask_type   = db.Column(db.String(40), default="full")
+    enabled     = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("user_id", "field_name", name="uq_masking_rule_user_field"),)
+
 class AlertDestination(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     user_id     = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -869,47 +880,117 @@ def group_multiline_log_records(raw: str, default_file: str = ""):
         records.append(current)
     return records
 
-def mask_secrets(text: str):
-    """Mask common Indian PII, secrets, account identifiers and tokens before any UI/API response."""
+DEFAULT_MASKING_RULES = [
+    {"field_name":"Phone", "mask_type":"partial", "enabled":True},
+    {"field_name":"Email", "mask_type":"hash", "enabled":True},
+    {"field_name":"BankAc", "mask_type":"full", "enabled":True},
+    {"field_name":"Amt", "mask_type":"full", "enabled":True},
+    {"field_name":"CollectionAmt", "mask_type":"full", "enabled":True},
+    {"field_name":"AppID", "mask_type":"full", "enabled":True},
+    {"field_name":"MerchantKey", "mask_type":"full", "enabled":True},
+    {"field_name":"Ref1", "mask_type":"searchable_mask", "enabled":True},
+    {"field_name":"Ref2", "mask_type":"partial", "enabled":True},
+    {"field_name":"Cust1", "mask_type":"partial", "enabled":True},
+    {"field_name":"Cust2", "mask_type":"partial", "enabled":True},
+    {"field_name":"Cust3", "mask_type":"partial", "enabled":True},
+    {"field_name":"IFSC", "mask_type":"partial", "enabled":True},
+    {"field_name":"MICR", "mask_type":"partial", "enabled":True},
+]
+
+def _hash_mask_value(value):
+    try:
+        return hashlib.sha256(str(value).encode("utf-8", errors="ignore")).hexdigest()[:12]
+    except Exception:
+        return "MASKED_HASH"
+
+def _mask_value(value, mask_type="full"):
+    if value is None:
+        return value
+    value = str(value)
+    if value == "":
+        return value
+    mt = (mask_type or "full").lower()
+    if mt == "partial":
+        if len(value) <= 4:
+            return "*" * len(value)
+        return value[:2] + "*" * min(8, max(4, len(value)-4)) + value[-2:]
+    if mt == "hash":
+        return "[HASH:" + _hash_mask_value(value) + "]"
+    if mt == "searchable_mask":
+        m = re.search(r"(\d{4,8})$", value)
+        suffix = m.group(1) if m else value[-6:]
+        return "[MASKED_ID:" + suffix + "]"
+    return "[MASKED]"
+
+def _default_masking_config():
+    return [dict(x) for x in DEFAULT_MASKING_RULES]
+
+def get_masking_config(user_id=None):
+    if not user_id:
+        return _default_masking_config()
+    try:
+        rules = MaskingRule.query.filter_by(user_id=user_id).order_by(MaskingRule.field_name.asc()).all()
+        if not rules:
+            for item in DEFAULT_MASKING_RULES:
+                db.session.add(MaskingRule(user_id=user_id, field_name=item["field_name"], mask_type=item["mask_type"], enabled=item["enabled"]))
+            db.session.commit()
+            rules = MaskingRule.query.filter_by(user_id=user_id).order_by(MaskingRule.field_name.asc()).all()
+        return [{"field_name":r.field_name, "mask_type":r.mask_type or "full", "enabled":bool(r.enabled)} for r in rules]
+    except Exception:
+        db.session.rollback()
+        return _default_masking_config()
+
+def apply_field_masking(text: str, config):
+    masked = str(text or "")
+    enabled = [r for r in (config or []) if r.get("enabled") and r.get("field_name")]
+    for rule in enabled:
+        key = re.escape(str(rule.get("field_name")))
+        mt = str(rule.get("mask_type") or "full")
+        def repl_json(m, mt=mt):
+            return m.group(1) + _mask_value(m.group(2), mt) + m.group(3)
+        masked = re.sub(r'(?i)("' + key + r'"\s*:\s*")([^"]*)(")', repl_json, masked)
+        def repl_kv(m, mt=mt):
+            return m.group(1) + _mask_value(m.group(2), mt)
+        masked = re.sub(r"(?i)(\b" + key + r"\b\s*[=:]\s*['\"]?)([^\s,;\"'}]+)", repl_kv, masked)
+    return masked
+
+def extract_safe_search_tokens(raw_text: str):
+    text = str(raw_text or "")
+    toks = set()
+    for val in re.findall(r"\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{4,}\b", text, re.I):
+        m = re.search(r"(\d{4,8})$", val)
+        if m:
+            toks.add(m.group(1))
+    for val in re.findall(r'(?i)"(?:Ref1|Ref2|reference|referenceId|transactionId)"\s*:\s*"([^"]+)"', text):
+        m = re.search(r"(\d{4,8})$", val)
+        if m:
+            toks.add(m.group(1))
+    return " ".join(sorted(toks))
+
+def mask_secrets(text: str, user_id=None):
+    """Mask PII/secrets plus user-configured fields before UI/API/storage."""
     if not text:
         return text
-
-    masked = str(text)
-
-    # JWT and long bearer-like tokens
+    masked = apply_field_masking(str(text), get_masking_config(user_id))
     masked = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[MASKED_JWT]", masked)
     masked = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{16,}", r"\1[MASKED_TOKEN]", masked)
     masked = re.sub(r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|token|password|passwd|pwd|secret|client[_-]?secret|signature|hmac)(\s*[=:]\s*['\"]?)([^\s,;\"'}]{4,})", r"\1\2[MASKED]", masked)
-
-    # Aadhaar: 12 digits, with optional spaces/hyphens. Keep explicit masking conservative enough for logs.
     masked = re.sub(r"(?i)(aadhaar|aadhar|uidai)(\s*[=:]\s*['\"]?)(\d[ -]?){12}", r"\1\2[MASKED_AADHAAR]", masked)
     masked = re.sub(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}\b", "[MASKED_AADHAAR]", masked)
-
-    # PAN card
     masked = re.sub(r"(?i)(pan|panNumber|pan_card)(\s*[=:]\s*['\"]?)[A-Z]{5}\d{4}[A-Z]", r"\1\2[MASKED_PAN]", masked)
     masked = re.sub(r"\b[A-Z]{5}\d{4}[A-Z]\b", "[MASKED_PAN]", masked)
-
-    # Indian mobile numbers, including +91 / 91 prefixes
     masked = re.sub(r"(?i)(mobile|phone|customerMobile|contact|msisdn)(\s*[=:]\s*['\"]?)(?:\+?91[- ]?)?[6-9]\d{9}", r"\1\2[MASKED_MOBILE]", masked)
     masked = re.sub(r"(?<!\d)(?:\+?91[- ]?)?[6-9]\d{9}(?!\d)", "[MASKED_MOBILE]", masked)
-
-    # Email addresses
     masked = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[MASKED_EMAIL]", masked)
-
-    # Customer names and IDs found in JSON/log key-value pairs
-    sensitive_keys = [
-        "customerName", "name", "fullName", "firstName", "lastName",
-        "loanNumber", "loanId", "accountNumber", "accountNo", "primaryCustomerId",
-        "customerId", "applicationNo", "checkoutId", "bbpsId", "receiptNumber",
-        "transactionId", "gatewayTransactionId", "upiId", "vpa", "cardNumber", "ifsc"
-    ]
+    sensitive_keys = ["customerName", "name", "fullName", "firstName", "lastName", "loanNumber", "loanId", "accountNumber", "accountNo", "primaryCustomerId", "customerId", "applicationNo", "checkoutId", "bbpsId", "receiptNumber", "transactionId", "gatewayTransactionId", "upiId", "vpa", "cardNumber"]
     key_alt = "|".join(map(re.escape, sensitive_keys))
     masked = re.sub(rf"(?i)(\"(?:{key_alt})\"\s*:\s*\")([^\"]+)(\")", r"\1[MASKED]\3", masked)
     masked = re.sub(rf"(?i)(\b(?:{key_alt})\b\s*[=:]\s*['\"]?)([A-Za-z0-9@._\- /]+)", r"\1[MASKED]", masked)
-
-    # Long numeric identifiers likely to be account/loan/reference numbers.
-    masked = re.sub(r"\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{6,}\b", "[MASKED_ID]", masked)
-
+    def repl_ref(m):
+        val = m.group(0)
+        num = re.search(r"(\d{4,8})$", val)
+        return "[MASKED_ID:" + (num.group(1) if num else val[-6:]) + "]"
+    masked = re.sub(r"\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{6,}\b", repl_ref, masked)
     return masked
 
 
@@ -920,7 +1001,7 @@ def persist_raw_upload(user_id: int, session_id: int, filename: str, raw: str):
     os.makedirs(user_dir, exist_ok=True)
     path = os.path.join(user_dir, f"session-{session_id}-{safe_name}.masked.log")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(mask_secrets(raw))
+        fh.write(mask_secrets(raw, user_id))
     return path
 
 
@@ -936,7 +1017,7 @@ def delete_persisted_upload(user_id: int, session_id: int):
             except OSError:
                 pass
 
-def build_log_rows(records, env, filename=""):
+def build_log_rows(records, env, filename="", user_id=None):
     rows=[]
     current_app=""; current_file=filename
     for rec in records:
@@ -976,7 +1057,7 @@ def build_log_rows(records, env, filename=""):
             "line_no": rec.get("line_no"), "time": extract_time(line, f"line {rec.get('line_no')}"), "env": env,
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
             "event": trace, "flow": flow, "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
-            "message": mask_secrets(line), "is_multiline": "\n" in line
+            "message": mask_secrets(line, user_id), "search_tokens": extract_safe_search_tokens(line), "is_multiline": "\n" in line
         })
     return rows
 
@@ -1001,10 +1082,10 @@ def row_matches_filters(row, filters):
         if op == '=' and not lat == val: return False
     return True
 
-def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = ""):
+def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = "", user_id=None):
     records = group_multiline_log_records(raw, filename)
     detected_env = infer_environment(raw[:5000], env)
-    all_rows = build_log_rows(records, detected_env, filename)
+    all_rows = build_log_rows(records, detected_env, filename, user_id)
     filters = parse_search_query(query)
     rows = [r for r in all_rows if row_matches_filters(r, filters)]
     lines = [r['message'] for r in rows]
@@ -1678,10 +1759,10 @@ def search_indexed_log_events(user_id, q="", env="", limit=200):
             elif lk == "env":
                 query = query.filter(LogEvent.environment.ilike(v))
             else:
-                query = query.filter(LogEvent.message.ilike(f"%{term}%"))
+                query = query.filter(db.or_(LogEvent.message.ilike(f"%{term}%"), LogEvent.row_json.ilike(f"%{term}%")))
         else:
             like = f"%{term}%"
-            query = query.filter(db.or_(LogEvent.message.ilike(like), LogEvent.trace_id.ilike(like), LogEvent.api_name.ilike(like), LogEvent.endpoint.ilike(like)))
+            query = query.filter(db.or_(LogEvent.message.ilike(like), LogEvent.row_json.ilike(like), LogEvent.trace_id.ilike(like), LogEvent.api_name.ilike(like), LogEvent.endpoint.ilike(like)))
     rows = query.order_by(LogEvent.created_at.desc(), LogEvent.id.desc()).limit(limit).all()
     return [(_json_loads_safe(r.row_json, {}) or {"time": r.event_time, "level": r.level, "app": r.api_name, "endpoint": r.endpoint, "trace": r.trace_id, "latency": r.latency_ms, "message": r.message}) for r in rows]
 
@@ -2035,11 +2116,11 @@ def analyse():
             return jsonify({"error": "No log content provided"}), 400
 
         start_ms = time.time()
-        result = analyse_log_text(raw, query, env, fname)
-        result["source_health"] = {"file_upload":"active", "api_ingestion":"available", "s3":"not_connected", "last_ingest":"now"}
         user = get_current_user()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
+        result = analyse_log_text(raw, query, env, fname, user.id)
+        result["source_health"] = {"file_upload":"active", "api_ingestion":"available", "s3":"not_connected", "last_ingest":"now"}
         # Persist log rows in Postgres so they survive sign-out/sign-in (up to 2000 rows)
         rows_to_store = result.get("log_rows", [])[:2000]
         result_summary = {k: v for k, v in result.items() if k != "log_rows"}
@@ -2089,7 +2170,7 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
             return
         try:
             job.status = "running"; job.started_at = datetime.datetime.utcnow(); db.session.commit()
-            result = analyse_log_text(raw, query, env, filename)
+            result = analyse_log_text(raw, query, env, filename, user_id)
             rows_to_store = result.get("log_rows", [])[:5000]
             result_summary = {k: v for k, v in result.items() if k != "log_rows"}
             ls = LogSession(user_id=user_id, environment=env, filename=filename,
@@ -2200,7 +2281,7 @@ def api_ingest():
         return jsonify({"error": "logs field or structured event payload required"}), 400
 
     started = time.time()
-    result = analyse_log_text(str(raw), "", env, app_n)
+    result = analyse_log_text(str(raw), "", env, app_n, user.id)
     duration_ms = int((time.time() - started) * 1000)
     rows_to_store = result.get("log_rows", [])[:5000]
     result_summary = {k: v for k, v in result.items() if k != "log_rows"}
@@ -2401,6 +2482,53 @@ def settings_environments():
         return jsonify({"environments": get_user_environments(user)})
     return jsonify({"environments": get_user_environments(user), "defaults": DEFAULT_ENVIRONMENTS})
 
+
+@app.route("/settings/masking", methods=["GET", "POST"])
+@login_required
+def settings_masking():
+    user = get_current_user()
+    if request.method == "GET":
+        return jsonify({"rules": get_masking_config(user.id), "mask_types": ["full", "partial", "hash", "searchable_mask"], "examples": {"full":"[MASKED]", "partial":"AB****89", "hash":"[HASH:9f86d081884c]", "searchable_mask":"[MASKED_ID:625409]"}})
+    data = request.get_json(silent=True) or {}
+    incoming = data.get("rules") or []
+    if not isinstance(incoming, list):
+        return jsonify({"error":"rules must be a list"}), 400
+    seen = set()
+    for item in incoming[:100]:
+        field = str(item.get("field_name") or item.get("name") or "").strip()[:120]
+        if not field or field.lower() in seen:
+            continue
+        seen.add(field.lower())
+        mt = str(item.get("mask_type") or item.get("type") or "full").strip()
+        if mt not in ("full", "partial", "hash", "searchable_mask"):
+            mt = "full"
+        rule = MaskingRule.query.filter_by(user_id=user.id, field_name=field).first()
+        if not rule:
+            rule = MaskingRule(user_id=user.id, field_name=field)
+            db.session.add(rule)
+        rule.mask_type = mt
+        rule.enabled = bool(item.get("enabled", True))
+        rule.updated_at = datetime.datetime.utcnow()
+    audit_event(user, "settings.masking_update", "masking-rules", {"count": len(seen)})
+    db.session.commit()
+    return jsonify({"ok": True, "rules": get_masking_config(user.id), "note": "New settings apply to future uploads immediately. Re-upload old raw logs to recover tokens that were already fully masked."})
+
+@app.route("/settings/masking/reprocess", methods=["POST"])
+@login_required
+def reprocess_masking_notice():
+    user = get_current_user()
+    sessions = LogSession.query.filter_by(user_id=user.id).order_by(LogSession.created_at.desc()).limit(50).all()
+    changed = 0
+    for sess in sessions:
+        rows = _json_loads_safe(sess.log_rows_json, [])
+        for r in rows:
+            if r.get("message"):
+                r["message"] = mask_secrets(r.get("message"), user.id)
+        sess.log_rows_json = json.dumps(rows, default=str)
+        changed += 1
+    audit_event(user, "settings.masking_reprocess", "stored-masked-rows", {"sessions": changed})
+    db.session.commit()
+    return jsonify({"ok": True, "sessions_reprocessed": changed, "warning": "Stored rows were re-masked, but values already replaced as [MASKED] cannot be recovered. Re-upload original logs to enable new searchable suffixes like 625409."})
 
 @app.route("/settings/saas", methods=["GET", "POST"])
 @login_required
@@ -2816,7 +2944,7 @@ def api_logs_search_with_query(q, env, limit, user):
                     raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
                 except Exception:
                     pass
-    result = analyse_log_text(raw, q, env, "api-search") if raw else {"log_rows": [], "total": 0}
+    result = analyse_log_text(raw, q, env, "api-search", user.id) if raw else {"log_rows": [], "total": 0}
     return jsonify({"query": q, "total": result.get("total",0), "rows": result.get("log_rows",[])[:limit]})
 
 @app.route("/api/docs")
@@ -2926,7 +3054,7 @@ ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-checkout-api].post:\c
 WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
 INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200
 """
-    result = analyse_log_text(sample, "", "DEMO", "demo-incident.log")
+    result = analyse_log_text(sample, "", "DEMO", "demo-incident.log", user.id)
     result["demo"] = True
     return jsonify(result)
 
