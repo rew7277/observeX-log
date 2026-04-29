@@ -302,7 +302,7 @@ function renderArchitectureSvg(ep){
   const cleanFlow=(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]))
     .filter(Boolean)
     .map(x=>String(x).replace(/^processor[:=\-\s]+/i,'').replace(/\/processors?\/\d+.*/i,'').replace(/-event-\d+-[0-9a-f].*/i,''))
-    .filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
+    .map(x=>String(x).trim()).filter(x=>x && !['client','common','default','logging','logger','mule-subflow','external-service'].includes(x.toLowerCase())).filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
   if(cleanFlow.length>=3){
     const cards=cleanFlow.map((step,i)=>{
       const low=String(step).toLowerCase();

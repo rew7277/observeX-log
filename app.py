@@ -1296,7 +1296,13 @@ def _normalise_mule_component_name(value: str) -> str:
 
 def _looks_like_processor_event_name(value: str) -> bool:
     low = str(value or '').lower()
-    return bool(re.search(r'(^|[\s/_-])processor[:=_-]', low) or re.search(r'-event-\d+-[0-9a-f]{4,}', low) or 'processors/' in low)
+    return bool(
+        low.startswith('processor-') or
+        low.startswith('processor:') or
+        'processor-make-api-call-event' in low or
+        'processors/' in low or
+        re.search(r'-event-\d+-[0-9a-f]{4,}', low)
+    )
 
 def _is_valid_api_inventory_name(value: str) -> bool:
     name = str(value or '').strip()
@@ -1308,6 +1314,110 @@ def _is_valid_api_inventory_name(value: str) -> bool:
     return ('api' in low or 'service' in low or 'engine' in low)
 
 
+
+def _meaningful_flow_name(name: str) -> str:
+    """Return a stable, user-facing Mule/API flow component name or ''."""
+    n = _clean_service_name(name)
+    if not n:
+        return ''
+    low = n.lower()
+    if low in {'client','common','default','logging','logger','log','logs','mule-subflow','mule-flow','external-service','service','flow','processor','response'}:
+        return ''
+    if low.startswith('processor-') or _looks_like_processor_event_name(n):
+        n = _normalise_mule_component_name(n)
+        n = _clean_service_name(n)
+        low = n.lower()
+    if not n or low in {'common','default','logging','external-service'}:
+        return ''
+    return n
+
+def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) -> list:
+    """Build a readable API -> flow/subflow -> outbound call -> response sequence."""
+    api = _clean_service_name(api_name) or 'Application'
+    steps = []
+    def add(x):
+        x = _meaningful_flow_name(x)
+        if not x:
+            return
+        if x.lower() == api.lower() and steps:
+            return
+        if not any(y.lower() == x.lower() for y in steps):
+            steps.append(x)
+    add(api)
+    proc_re_local = re.compile(r'\[processor:\s*([^;\]]+)', re.I)
+    flow_re_local = re.compile(r'(?:flow(?:Name)?|subflow|route)\s*[=:]\s*["\']?([A-Za-z0-9_][A-Za-z0-9_.:-]{2,80})', re.I)
+    outbound_seen = False
+    for r in (rows or [])[:1200]:
+        msg = str(r.get('message') or '')
+        for m in proc_re_local.finditer(msg):
+            add(m.group(1))
+        for m in flow_re_local.finditer(msg):
+            add(m.group(1))
+        if re.search(r'\b(?:before|after)\s+request\s+to\b|\b(?:calling|request to|invoking)\b', msg, re.I):
+            outbound_seen = True
+            add('make-api-call')
+        for key in ('make-api-call','mandateStatusCallBack-sub-flow','mandate-status-callback-sub-flow'):
+            if key.lower() in msg.lower():
+                add(key)
+    if len(steps) <= 1 and arch:
+        for item in arch.get('simple_flow', []) or []:
+            add(item)
+        for n in arch.get('nodes', []):
+            nm = n.get('name') if isinstance(n, dict) else str(n)
+            add(nm)
+    business = [x for x in steps if not re.search(r'(^|-)entry-logger-flow$|(^|-)exit-logger-flow$', x, re.I)]
+    if len(business) >= 2:
+        steps = business
+    lows = [x.lower() for x in steps]
+    if outbound_seen and 'make-api-call' in lows and not any(('external' in x or 'flexcube' in x or 'vendor' in x) for x in lows):
+        idx = lows.index('make-api-call') + 1
+        steps.insert(idx, 'External-System')
+    if not any(x.lower() == 'response' for x in steps):
+        steps.append('Response')
+    final = []
+    for x in steps:
+        if x and not any(y.lower() == x.lower() for y in final):
+            final.append(x)
+    return final[:10]
+
+def _synthetic_trace_and_matrix(flow: list, req_count: int = 0, err_count: int = 0, avg_latency: int = 0) -> tuple:
+    """Create useful waterfall/matrix data from a clean flow when logs lack distributed trace spans."""
+    flow = [x for x in (flow or []) if x]
+    if len(flow) < 2:
+        return [], []
+    per = max(1, int((avg_latency or max(50, len(flow)*20)) / max(1, len(flow)-1)))
+    rows = []
+    elapsed = 0
+    for i, name in enumerate(flow):
+        dur = per if i < len(flow)-1 else 1
+        rows.append({'time': '', 'service': name, 'level': 'ERROR' if err_count and i == len(flow)-2 else 'INFO', 'message': 'Derived from Mule processor sequence' if i else 'API entry', 'latency': dur, 'start_ms': elapsed, 'duration_ms': dur})
+        elapsed += dur
+    traces = [{'trace': 'derived-flow', 'rows': rows, 'errors': int(err_count or 0), 'latency': elapsed, 'endpoint': '/', 'api': flow[0]}]
+    matrix = []
+    for a,b in zip(flow, flow[1:]):
+        matrix.append({'from': a, 'to': b, 'calls': int(req_count or 1), 'errors': int(err_count or 0) if b == flow[-2] else 0, 'avg_latency_ms': per, 'error_rate': round((int(err_count or 0)/max(1,int(req_count or 1)))*100,1) if b == flow[-2] else 0})
+    return traces, matrix
+
+def _sanitize_architecture_for_response(api_name: str, arch: dict, request_count: int = 0, error_count: int = 0, avg_latency: int = 0) -> dict:
+    """Clean old stored architecture payloads so UI does not show generic/noisy topology nodes."""
+    arch = arch if isinstance(arch, dict) else {}
+    flow = _build_clean_execution_flow(api_name, [], arch)
+    if len(flow) >= 2:
+        arch['simple_flow'] = flow
+        arch['nodes'] = [{'id': x, 'name': x, 'tier': _service_tier(x), 'count': request_count if i == 0 else 1, 'errors': error_count if i == len(flow)-2 else 0, 'warns': 0, 'avg_latency_ms': avg_latency if i == len(flow)-2 else 0, 'health': 'critical' if error_count and i == len(flow)-2 else 'ok'} for i, x in enumerate(flow)]
+        arch['edges'] = [{'from': a, 'to': b, 'count': request_count or 1, 'errors': error_count if b == flow[-2] else 0, 'avg_latency_ms': avg_latency if b == flow[-2] else 0, 'error_rate': round(error_count / max(1, request_count or 1) * 100, 1) if b == flow[-2] else 0, 'label': 'calls'} for a, b in zip(flow, flow[1:])]
+        if not arch.get('traces') or arch.get('traces') == []:
+            traces, matrix = _synthetic_trace_and_matrix(flow, request_count, error_count, avg_latency)
+            arch['traces'] = traces
+            arch['matrix'] = matrix
+        if not arch.get('matrix'):
+            _, matrix = _synthetic_trace_and_matrix(flow, request_count, error_count, avg_latency)
+            arch['matrix'] = matrix
+        arch['tiers'] = sorted(set(_service_tier(x) for x in flow), key=lambda t: {"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}.get(t,9))
+    arch.setdefault('hints', [])
+    if 'Cleaned topology: processor event IDs and generic tags are hidden.' not in arch['hints']:
+        arch['hints'].append('Cleaned topology: processor event IDs and generic tags are hidden.')
+    return arch
 def _service_tier(name: str) -> str:
     """Classify a service name into an architecture tier."""
     low = (name or '').lower()
@@ -1634,23 +1744,26 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
 
             arch = extract_architecture_graph(ep_rows, raw, env, session_id, user_id, api_name, endpoint)
 
-            # Build a clean linear flow from tier-ordered nodes
-            flow_steps = ['Client']
-            tier_order_vals = {"Client": 0, "Gateway": 1, "API": 2, "Service": 3, "External": 4, "Data": 5}
-            sorted_nodes = sorted(
-                [n for n in arch.get('nodes', []) if n['name'] not in ('Client', 'Response')],
-                key=lambda n: tier_order_vals.get(n['tier'], 9)
-            )
-            for n in sorted_nodes:
-                if n['name'] not in flow_steps:
-                    flow_steps.append(n['name'])
-            if 'Response' not in flow_steps:
-                flow_steps.append('Response')
+            req_count  = len(ep_rows)
+            err_count  = sum(1 for r in ep_rows if r.get('level') in ('ERROR', 'FAILURE'))
+            lats       = [int(r.get('latency') or 0) for r in ep_rows if r.get('latency') and int(r.get('latency') or 0) > 0]
+            avg_lat    = round(sum(lats) / len(lats)) if lats else 0
 
-            arch['simple_flow'] = flow_steps[:14]
+            # Build clean semantic topology from Mule processor sequence, not from generic tag/tier sorting.
+            flow_steps = _build_clean_execution_flow(api_name, ep_rows, arch)
+            arch['simple_flow'] = flow_steps
+            arch['nodes'] = [{'id': x, 'name': x, 'tier': _service_tier(x), 'count': req_count if i == 0 else 1, 'errors': err_count if i == len(flow_steps)-2 else 0, 'warns': 0, 'avg_latency_ms': avg_lat if i == len(flow_steps)-2 else 0, 'health': 'critical' if err_count and i == len(flow_steps)-2 else 'ok'} for i, x in enumerate(flow_steps)]
+            arch['edges'] = [{'from': a, 'to': b, 'count': req_count or 1, 'errors': err_count if b == flow_steps[-2] else 0, 'avg_latency_ms': avg_lat if b == flow_steps[-2] else 0, 'error_rate': round(err_count / max(1, req_count) * 100, 1) if b == flow_steps[-2] else 0, 'label': 'calls'} for a, b in zip(flow_steps, flow_steps[1:])]
+            if not arch.get('traces'):
+                traces, matrix = _synthetic_trace_and_matrix(flow_steps, req_count, err_count, avg_lat)
+                arch['traces'] = traces
+                arch['matrix'] = matrix
+            elif not arch.get('matrix'):
+                _, matrix = _synthetic_trace_and_matrix(flow_steps, req_count, err_count, avg_lat)
+                arch['matrix'] = matrix
+            arch['tiers'] = sorted(set(_service_tier(x) for x in flow_steps), key=lambda t: {"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}.get(t,9))
             arch.setdefault('hints', [])
-            arch['hints'].append('Processor event IDs are normalized and hidden; topology shows stable Mule flow components only.')
-
+            arch['hints'].append('Topology is built from Mule processor order; generic tags such as common/default/logging are hidden.')
             req_count  = len(ep_rows)
             err_count  = sum(1 for r in ep_rows if r.get('level') in ('ERROR', 'FAILURE'))
             lats       = [int(r.get('latency') or 0) for r in ep_rows if r.get('latency') and int(r.get('latency') or 0) > 0]
@@ -2766,7 +2879,7 @@ def api_system_map():
                 "endpoint":       ep_key,
                 "method":         r.method,
                 "flow_steps":     json.loads(r.flow_steps_json or "[]"),
-                "architecture":   json.loads(r.architecture_json or "{}"),
+                "architecture":   _sanitize_architecture_for_response(r.api_name, json.loads(r.architecture_json or "{}"), r.request_count, r.error_count, r.avg_latency_ms),
                 "request_count":  r.request_count,
                 "error_count":    r.error_count,
                 "avg_latency_ms": r.avg_latency_ms,
@@ -2798,6 +2911,7 @@ def api_system_map():
                 cur["traces"] = (cur.get("traces", []) + arch.get("traces", []))[:12]
                 cur["matrix"] = (cur.get("matrix", []) + arch.get("matrix", []))[:80]
                 cur["tiers"] = sorted(set(cur.get("tiers", []) + arch.get("tiers", [])))
+                ep["architecture"] = _sanitize_architecture_for_response(r.api_name, cur, ep.get("request_count",0), ep.get("error_count",0), ep.get("avg_latency_ms",0))
             except Exception:
                 pass
 
@@ -2833,11 +2947,16 @@ def api_system_map():
         for ep in registry_eps:
             ep_key = ep.endpoint or "/"
             if ep_key not in data["endpoints"]:
+                reg_flow = [reg.api_name] + [_meaningful_flow_name(x) for x in _json_loads_safe(reg.downstream_systems_json, [])]
+                reg_flow = [x for x in reg_flow if x]
+                if not any(str(x).lower() == 'response' for x in reg_flow):
+                    reg_flow.append('Response')
+                reg_arch = _sanitize_architecture_for_response(reg.api_name, {'simple_flow': reg_flow, 'hints': ['Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency.']}, ep.request_count or 0, ep.error_count or 0, ep.avg_latency_ms or 0)
                 data["endpoints"][ep_key] = {
                     "endpoint": ep_key,
                     "method": ep.method,
-                    "flow_steps": [reg.api_name] + _json_loads_safe(reg.downstream_systems_json, []) + ["Response"],
-                    "architecture": {"simple_flow": [reg.api_name] + _json_loads_safe(reg.downstream_systems_json, []) + ["Response"], "hints": ["Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency."]},
+                    "flow_steps": reg_arch.get('simple_flow', reg_flow),
+                    "architecture": reg_arch,
                     "request_count": ep.request_count or 0,
                     "error_count": ep.error_count or 0,
                     "avg_latency_ms": ep.avg_latency_ms or 0,
