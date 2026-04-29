@@ -629,6 +629,102 @@ async function loadWidgets(){try{let rows=await safeJson(await fetch('/dashboard
 async function loadIncidents(){try{let rows=await safeJson(await fetch('/incidents')).catch(()=>[]);setHTML('incidents-content','<div class="table-wrap"><table><thead><tr><th>ID</th><th>Title</th><th>Severity</th><th>API</th><th>Owner</th><th>Status</th><th>Action</th></tr></thead><tbody>'+((rows||[]).map(i=>`<tr><td>${i.id}</td><td>${esc(i.title)}</td><td>${esc(i.severity||'Medium')}</td><td>${esc(i.impacted_apis||'')}</td><td>${esc(i.owner||'Unassigned')}</td><td><span class="status-pill ${i.status==='Resolved'?'status-resolved':i.status==='Acknowledged'?'status-ack':'status-open'}">${esc(i.status||'Open')}</span></td><td><button class="btn btn-ghost btn-sm" onclick="updateIncident(${i.id},'Acknowledged')">Ack</button><button class="btn btn-ghost btn-sm" onclick="updateIncident(${i.id},'Resolved')">Resolve</button></td></tr>`).join('')||'<tr><td colspan="7">No incidents yet.</td></tr>')+'</tbody></table></div>')}catch(e){console.warn(e)}}
 async function loadLogMetrics(){try{let d=await safeJson(await fetch('/log-metrics')).catch(()=>({}));setHTML('metrics-content',`<div class="lite-grid"><div class="kpi"><b>${d.errors||0}</b><span>Errors</span></div><div class="kpi"><b>${d.warnings||0}</b><span>Warnings</span></div><div class="kpi"><b>${d.success||0}</b><span>Success</span></div><div class="kpi"><b>${d.ingested_lines||0}</b><span>Ingested Lines</span></div><div class="kpi"><b>${esc((d.anomaly||{}).status||'Normal')}</b><span>Anomaly</span></div></div><div class="two" style="margin-top:14px"><div class="card"><h3>Metrics Summary</h3>${(d.metrics||[]).map(m=>`<div class="node-card"><b>${esc(m.name)}</b><div style="color:var(--tx2)">${esc(m.value)}</div></div>`).join('')||'<p style="color:var(--tx3)">No metrics yet.</p>'}</div><div class="card"><h3>Anomaly Summary</h3><div class="node-card"><b>${esc((d.anomaly||{}).status||'Normal')}</b><div style="color:var(--tx2)">${esc((d.anomaly||{}).reason||'Not enough history yet. Baseline will improve as logs are ingested.')}</div></div></div></div>`)}catch(e){console.warn(e)}}
 
+
+// V25 fixes: robust JSON handling, working Log Search buttons, Trace Explorer, and safer history deletion UI.
+async function safeJson(res){
+  const text = await res.text().catch(()=>"");
+  let d = {};
+  try { d = text ? JSON.parse(text) : {}; } catch(e) { d = {error: text || 'Invalid server response'}; }
+  if(!res.ok) throw new Error(d.error || d.detail || ('HTTP '+res.status));
+  return d;
+}
+function parseQueryLanguage(q){
+  const out={text:[], env:'', app:'', level:'', trace:''};
+  String(q||'').split(/\s+/).filter(Boolean).forEach(tok=>{
+    const m=tok.match(/^(env|environment|app|api|level|trace|event)[:=](.+)$/i);
+    if(m){ const k=m[1].toLowerCase(), v=m[2];
+      if(k==='environment'||k==='env') out.env=v;
+      else if(k==='api'||k==='app') out.app=v;
+      else if(k==='level') out.level=v;
+      else if(k==='trace'||k==='event') out.trace=v;
+    } else out.text.push(tok);
+  });
+  return out;
+}
+function rowMatchesDateTime(r, fd, td, ft, tt){
+  const raw=String(r.time||r.event_time||'').trim();
+  if(!raw) return true;
+  const datePart=(raw.match(/\d{4}-\d{2}-\d{2}/)||[''])[0];
+  const timePart=(raw.match(/\d{2}:\d{2}/)||[''])[0];
+  if(fd && datePart && datePart < fd) return false;
+  if(td && datePart && datePart > td) return false;
+  if(ft && timePart && timePart < ft) return false;
+  if(tt && timePart && timePart > tt) return false;
+  return true;
+}
+function applyClientSearch(){
+  const env=(byId('filter-env')||{}).value||'';
+  const file=(byId('filter-file')||{}).value||'';
+  const app=(byId('filter-app')||{}).value||'';
+  const level=(byId('filter-level')||{}).value||'';
+  const fd=(byId('from-date')||{}).value||'', td=(byId('to-date')||{}).value||'';
+  const ft=(byId('from-time')||{}).value||'', tt=(byId('to-time')||{}).value||'';
+  const qRaw=(byId('filter-q')||{}).value||'';
+  const ql=parseQueryLanguage(qRaw);
+  const finalEnv=ql.env||env, finalApp=ql.app||app, finalLevel=ql.level||level;
+  const needle=[ql.trace, ql.text.join(' ')].filter(Boolean).join(' ').toLowerCase();
+  const rows=(_allRows||[]).filter(r=>{
+    if(finalEnv && String(r.env||r.environment||'').toLowerCase()!==String(finalEnv).toLowerCase()) return false;
+    if(file && String(r.uploadName||r.file||r.filename||'')!==file) return false;
+    if(finalApp && !String(r.app||r.api||r.api_name||'').toLowerCase().includes(String(finalApp).toLowerCase())) return false;
+    if(finalLevel && String(r.level||'').toUpperCase()!==String(finalLevel).toUpperCase()) return false;
+    if(!rowMatchesDateTime(r,fd,td,ft,tt)) return false;
+    if(needle){ const hay=[r.trace,r.event,r.message,r.flow,r.app,r.api,r.endpoint,r.level,r.status].map(x=>String(x||'')).join(' ').toLowerCase(); if(!hay.includes(needle)) return false; }
+    return true;
+  });
+  renderRows(rows);
+  const info=byId('logs-page-info'); if(info) info.textContent=`${rows.length} matching log(s)`;
+}
+function clearLogFilters(){
+  ['filter-env','filter-file','filter-app','filter-level','from-date','to-date','from-time','to-time','filter-q'].forEach(id=>{const el=byId(id); if(el) el.value='';});
+  renderRows(_allRows||[]);
+}
+function quickLevel(level){const el=byId('filter-level'); if(el) el.value=level; applyClientSearch();}
+function quickSearch(q){const el=byId('filter-q'); if(el) el.value=q||''; applyClientSearch(); showSection('logs');}
+function updateFilters(){
+  const fill=(id,vals,label)=>{const el=byId(id); if(!el)return; const current=el.value; el.innerHTML=`<option value="">${label}</option>`+[...vals].sort().map(v=>`<option>${esc(v)}</option>`).join(''); if(current) el.value=current;};
+  fill('filter-file', new Set((_allRows||[]).map(r=>r.uploadName||r.file||r.filename).filter(Boolean)), 'All Files');
+  fill('filter-app', new Set((_allRows||[]).map(r=>r.app||r.api||r.api_name).filter(Boolean)), 'All Apps');
+}
+function openTrace(){
+  const id=(byId('trace-q')||{}).value?.trim();
+  if(!id) return alert('Enter trace/event ID');
+  const rows=(_allRows||[]).filter(r=>[r.trace,r.event,r.message,r.flow,r.app,r.endpoint].some(v=>String(v||'').includes(id)));
+  const errs=rows.filter(r=>/ERROR|FAILURE/i.test(r.level||'')).length;
+  const explain=byId('trace-explain'), inline=byId('trace-inline');
+  if(explain){explain.style.display='block';explain.innerHTML=`<b>Trace explanation:</b> ${errs?`This trace contains ${errs} failure signal(s). Start at the first ERROR/FAILURE and read previous INFO/DEBUG lines.`:'No failure found in the loaded rows for this trace. Use it as timing/context evidence.'}`;}
+  if(inline){inline.innerHTML=rows.map(r=>`<div class="trace-row" onclick="openLogModal(${_allRows.indexOf(r)})" style="cursor:pointer"><span>${esc(r.time||'')}</span><span class="badge ${badge(r.level||'')}">${esc(r.level||'')}</span><span>${esc(r.app||r.api||'')}</span><span class="mono">${esc(r.message||'').slice(0,520)}</span></div>`).join('')||'<div style="color:var(--tx3);padding:14px">No trace found in currently loaded logs. Reload an upload session from Upload History or upload the related log file.</div>';}
+  showSection('logs');
+}
+function clearTrace(){const tq=byId('trace-q'); if(tq)tq.value=''; const ex=byId('trace-explain'); if(ex)ex.style.display='none'; setHTML('trace-inline','');}
+async function deleteHistory(id){
+  if(!confirm('Delete this session and its indexed log rows?')) return;
+  try{ await safeJson(await fetch('/history?id='+encodeURIComponent(id),{method:'DELETE'})); await loadHistory(); await loadSystemMap(); }
+  catch(e){ alert('Delete failed: '+e.message); }
+}
+async function clearServerHistory(){
+  if(!confirm('Delete ALL saved sessions, indexed log rows and system map data?')) return;
+  try{ await safeJson(await fetch('/history',{method:'DELETE'})); await loadHistory(); await loadSystemMap(); }
+  catch(e){ alert('Clear history failed: '+e.message); }
+}
+async function deleteSelectedHistory(){
+  const ids=[...document.querySelectorAll('.history-check:checked')].map(cb=>cb.value);
+  if(!ids.length){alert('Select at least one history item.');return;}
+  if(!confirm(`Delete ${ids.length} selected session(s), log rows and system map data?`))return;
+  try{ for(const id of ids){ await safeJson(await fetch('/history?id='+encodeURIComponent(id),{method:'DELETE'})); } await loadHistory(); await loadSystemMap(); }
+  catch(e){ alert('Delete selected failed: '+e.message); }
+}
+
 setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
 </script>
 {% endblock %}

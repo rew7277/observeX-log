@@ -2256,22 +2256,35 @@ def history():
     uid = user.id
     if request.method == 'DELETE':
         sid = request.args.get('id')
-        q = LogSession.query.filter_by(user_id=uid)
-        if sid:
-            item = q.filter_by(id=sid).first()
-            if item:
-                delete_persisted_upload(uid, item.id)
-                # Cascade-delete system map entries for this session
-                ApiFlowMap.query.filter_by(user_id=uid, session_id=item.id).delete()
-                db.session.delete(item)
-        else:
-            for item in q.all():
-                delete_persisted_upload(uid, item.id)
-                ApiFlowMap.query.filter_by(user_id=uid, session_id=item.id).delete()
-                db.session.delete(item)
-        audit_event(user, 'logs.delete', sid or 'all', {'scope':'history_delete'})
-        db.session.commit()
-        return jsonify({'status':'deleted'})
+
+        def _delete_session_tree(item):
+            if not item:
+                return 0
+            # Delete child/index tables first to avoid FK failures on Railway/Postgres.
+            LogEvent.query.filter_by(user_id=uid, session_id=item.id).delete(synchronize_session=False)
+            TraceIndex.query.filter_by(user_id=uid, session_id=item.id).delete(synchronize_session=False)
+            FlowEdge.query.filter_by(user_id=uid, session_id=item.id).delete(synchronize_session=False)
+            ApiFlowMap.query.filter_by(user_id=uid, session_id=item.id).delete(synchronize_session=False)
+            delete_persisted_upload(uid, item.id)
+            db.session.delete(item)
+            return 1
+
+        try:
+            q = LogSession.query.filter_by(user_id=uid)
+            deleted = 0
+            if sid:
+                item = q.filter_by(id=sid).first()
+                deleted += _delete_session_tree(item)
+            else:
+                for item in q.all():
+                    deleted += _delete_session_tree(item)
+            audit_event(user, 'logs.delete', sid or 'all', {'scope':'history_delete', 'deleted': deleted})
+            db.session.commit()
+            return jsonify({'status':'deleted', 'deleted': deleted})
+        except Exception as exc:
+            db.session.rollback()
+            app.logger.exception('history delete failed')
+            return jsonify({'error': 'Unable to delete upload history. Child log indexes were rolled back safely.', 'detail': str(exc)[:300]}), 500
     sessions = LogSession.query.filter_by(user_id=uid)\
                                .order_by(LogSession.created_at.desc()).limit(50).all()
     return jsonify([{
