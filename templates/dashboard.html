@@ -186,7 +186,16 @@ function onSmApiChange(){
   if(api.endpoints&&api.endpoints.length){_selectedEndpoint=api.endpoints[0];renderArchitecture(_selectedEndpoint);} else document.getElementById('flow-diagram').innerHTML='No endpoints detected for this API.';
 }
 function onSmEndpointChange(){let apiName=document.getElementById('sm-api-select').value,epVal=document.getElementById('sm-endpoint-select').value;if(!apiName||!_smData)return;let api=_smData.apis.find(a=>a.api_name===apiName);if(!api)return;let ep=epVal?api.endpoints.find(e=>(e.endpoint||'/')==epVal):api.endpoints[0];if(ep){_selectedEndpoint=ep;renderArchitecture(ep);}}
-function renderArchitecture(ep){renderArchitectureSvg(ep);renderTraceWaterfall(ep);renderCallMatrix(ep);document.getElementById('sm-trace-path').innerHTML=`<b>Trace example:</b> <code class="mono">${esc(ep.sample_trace||'—')}</code>`;document.getElementById('sm-kpi-lat').textContent=(ep.avg_latency_ms||0)+'ms';if(ep.sample_trace)document.getElementById('sm-kpi-trace').textContent=ep.sample_trace.slice(0,24)+(ep.sample_trace.length>24?'…':'');}
+function renderArchitecture(ep){
+  renderArchitectureSvg(ep);renderTraceWaterfall(ep);renderCallMatrix(ep);
+  document.getElementById('sm-trace-path').innerHTML=`<b>Trace example:</b> <code class="mono">${esc(ep.sample_trace||'—')}</code>`;
+  document.getElementById('sm-kpi-lat').textContent=(ep.avg_latency_ms||0)+'ms';
+  if(ep.sample_trace)document.getElementById('sm-kpi-trace').textContent=ep.sample_trace.slice(0,24)+(ep.sample_trace.length>24?'…':'');
+  const hints=(ep.architecture&&ep.architecture.hints)||[];
+  const deps=(ep.architecture&&ep.architecture.nodes||[]).filter(n=>['External','Data'].includes(n.tier)).map(n=>n.name);
+  const hintEl=document.getElementById('flow-hints'); if(hintEl) hintEl.innerHTML=hints.length?hints.map(h=>`<div class="finding-row"><span>${esc(h)}</span><span class="badge badge-info">Hint</span></div>`).join(''):'Topology is based on API listener + Mule processor/event correlation.';
+  const depEl=document.getElementById('deps'); if(depEl) depEl.innerHTML=deps.length?deps.map(d=>`<span class="chip">${esc(d)}</span>`).join(''):'No external dependency markers found in this log sample.';
+}
 function renderArchitectureSvg(ep){
   let arch=ep.architecture||{},nodes=arch.nodes||[],edges=arch.edges||[];
   if(!nodes.length){
