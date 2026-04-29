@@ -1,13 +1,14 @@
 import os, re, json, hashlib, secrets, datetime, threading, time
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash, make_response
+    session, jsonify, flash, make_response, abort
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
+from sqlalchemy import text
 
 try:
     from authlib.integrations.flask_client import OAuth
@@ -26,10 +27,29 @@ def apply_security_headers(response):
     response.headers.setdefault("Content-Security-Policy", "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self'")
     return response
 
+# Rate limiting: Redis in production, safe in-memory fallback for local dev.
 _API_RATE_BUCKET = {}
+_REDIS_CLIENT = None
+try:
+    if os.environ.get("REDIS_URL"):
+        import redis
+        _REDIS_CLIENT = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+except Exception:
+    _REDIS_CLIENT = None
+
 def api_rate_limited(key, limit=120, window=60):
     now = int(time.time())
-    bucket = _API_RATE_BUCKET.setdefault(key, [])
+    safe_key = hashlib.sha256(str(key).encode()).hexdigest()[:32]
+    if _REDIS_CLIENT is not None:
+        try:
+            redis_key = f"observex:rl:{safe_key}:{now // window}"
+            count = _REDIS_CLIENT.incr(redis_key)
+            if count == 1:
+                _REDIS_CLIENT.expire(redis_key, window + 5)
+            return int(count) > int(limit)
+        except Exception:
+            app.logger.exception("Redis rate limiter failed; falling back to memory")
+    bucket = _API_RATE_BUCKET.setdefault(safe_key, [])
     bucket[:] = [t for t in bucket if now - t < window]
     if len(bucket) >= limit:
         return True
@@ -44,6 +64,9 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FLASK_ENV") == "production" or bool(os.environ.get("RAILWAY_ENVIRONMENT"))
 
 # Mail (configure via env vars in Railway)
 app.config["MAIL_SERVER"]   = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
@@ -80,6 +103,67 @@ MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "observex")
 _mongo_client = None
 
+# ── CSRF and API-key helpers ─────────────────────────────────────────────────
+def csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+@app.context_processor
+def inject_security_tokens():
+    return {"csrf_token": csrf_token}
+
+@app.before_request
+def protect_form_posts():
+    # API and JSON/fetch endpoints use bearer auth or same-origin JSON; browser HTML forms must include CSRF.
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.path.startswith("/api/") or request.path in {"/analyse", "/analyse/async", "/alerts", "/connectors", "/saved-searches", "/alert-destinations", "/profile/apikey", "/history"}:
+        return None
+    sent = request.form.get("csrf_token") or request.headers.get("X-CSRFToken")
+    if not sent or not secrets.compare_digest(str(sent), str(session.get("csrf_token", ""))):
+        abort(400, "Invalid CSRF token")
+    return None
+
+def generate_api_key():
+    raw = "ox_" + secrets.token_urlsafe(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:10]
+
+def hash_api_key(raw):
+    return hashlib.sha256(str(raw).encode()).hexdigest()
+
+def lookup_user_by_api_key(raw_key):
+    if not raw_key:
+        return None
+    digest = hash_api_key(raw_key)
+    user = User.query.filter_by(api_key_hash=digest).first()
+    if user:
+        user.api_key_last_used = datetime.datetime.utcnow()
+        return user
+    # Backward compatibility: migrate plaintext legacy key on first successful use.
+    legacy = User.query.filter_by(api_key=raw_key).first()
+    if legacy:
+        legacy.api_key_hash = digest
+        legacy.api_key_prefix = str(raw_key)[:10]
+        legacy.api_key = None
+        legacy.api_key_last_used = datetime.datetime.utcnow()
+        return legacy
+    return None
+
+def ensure_default_api_key(user):
+    if not user:
+        return None
+    if user.api_key_hash:
+        return None
+    raw, digest, prefix = generate_api_key()
+    user.api_key_hash = digest
+    user.api_key_prefix = prefix
+    user.api_key = None
+    return raw
+
+
 def get_mongo_db():
     global _mongo_client
     if not MONGO_URI:
@@ -108,7 +192,12 @@ class User(db.Model):
     reset_token   = db.Column(db.String(100), nullable=True)
     reset_expires = db.Column(db.DateTime, nullable=True)
     created_at    = db.Column(db.DateTime, default=datetime.datetime.utcnow)
-    api_key       = db.Column(db.String(64), default=lambda: secrets.token_hex(32))
+    # api_key is retained only for backward compatibility with older deployments.
+    # New keys are returned once and stored as api_key_hash at rest.
+    api_key       = db.Column(db.String(64), nullable=True)
+    api_key_hash  = db.Column(db.String(128), nullable=True, index=True)
+    api_key_prefix = db.Column(db.String(12), nullable=True)
+    api_key_last_used = db.Column(db.DateTime, nullable=True)
 
 class LogSession(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
@@ -369,9 +458,44 @@ def apply_retention_for_user(user):
 
 _db_init_lock = threading.Lock()
 
+def ensure_runtime_columns():
+    # Lightweight compatibility for Railway projects that previously used db.create_all().
+    # Real production projects should use Flask-Migrate/Alembic; this prevents 500s on existing DBs.
+    engine = db.engine
+    dialect = engine.dialect.name
+    stmts = []
+    if dialect == "postgresql":
+        stmts = [
+            "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_hash VARCHAR(128)",
+            "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_prefix VARCHAR(12)",
+            "ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS api_key_last_used TIMESTAMP",
+        ]
+    else:
+        existing = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
+        if "api_key_hash" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_hash VARCHAR(128)")
+        if "api_key_prefix" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_prefix VARCHAR(12)")
+        if "api_key_last_used" not in existing: stmts.append("ALTER TABLE user ADD COLUMN api_key_last_used DATETIME")
+    for stmt in stmts:
+        db.session.execute(text(stmt))
+    db.session.commit()
+
+def migrate_legacy_api_keys():
+    try:
+        for user in User.query.filter(User.api_key.isnot(None)).all():
+            if user.api_key and not user.api_key_hash:
+                user.api_key_hash = hash_api_key(user.api_key)
+                user.api_key_prefix = user.api_key[:10]
+                user.api_key = None
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Legacy API key migration skipped")
+
 def init_db_once():
     with _db_init_lock:
         db.create_all()
+        ensure_runtime_columns()
+        migrate_legacy_api_keys()
 
 with app.app_context():
     init_db_once()
@@ -873,6 +997,7 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
         "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
         "top_errors": top_errors, "findings": findings, "suggestions": suggestions, "smart_tags": smart_tags,
         "dependencies": deps, "health_score": round(score), "log_rows": rows[:2000],
+        "truncated": len(rows) > 2000, "total_parsed": len(rows), "showing": min(len(rows), 2000),
         "root_cause": root_cause, "hot_traces": hot_traces, "app_health": app_health,
         "timeline_buckets": timeline_buckets, "action_cards": action_cards, "deploy_summary": deploy_summary,
         "preview": "\n".join(lines[:500]),
@@ -954,6 +1079,8 @@ def google_callback():
     user = User.query.filter_by(email=email).first()
     if not user:
         user = User(name=name, email=email, password_hash=generate_password_hash(secrets.token_urlsafe(32)))
+        raw_key, digest, prefix = generate_api_key()
+        user.api_key_hash = digest; user.api_key_prefix = prefix
         db.session.add(user); db.session.flush()
         ws = Workspace(owner_id=user.id, name=f"{name}'s Workspace")
         db.session.add(ws); db.session.flush()
@@ -981,6 +1108,8 @@ def register():
         else:
             user = User(name=name, email=email,
                         password_hash=generate_password_hash(pwd))
+            raw_key, digest, prefix = generate_api_key()
+            user.api_key_hash = digest; user.api_key_prefix = prefix
             db.session.add(user)
             db.session.flush()
             invite = InviteCode.query.filter_by(code=invite_code, active=True).first() if invite_code else None
@@ -1144,6 +1273,58 @@ def analyse():
         app.logger.exception("Log analysis failed")
         return jsonify({"error": f"Log analysis failed: {str(exc)}"}), 500
 
+# ── Optional async ingestion for very large uploads ───────────────────────────
+def run_ingestion_job(job_id, user_id, raw, query, env, filename):
+    with app.app_context():
+        job = db.session.get(IngestionJob, job_id)
+        if not job:
+            return
+        try:
+            job.status = "running"; job.started_at = datetime.datetime.utcnow(); db.session.commit()
+            result = analyse_log_text(raw, query, env, filename)
+            ls = LogSession(user_id=user_id, environment=env, filename=filename,
+                            total_lines=result["total"], error_count=result["errors"],
+                            warn_count=result["warns"], avg_latency=result["latency"],
+                            apps_found=",".join(result["apps"]))
+            db.session.add(ls); db.session.flush()
+            persist_raw_upload(user_id, ls.id, filename, raw)
+            job.status = "success"; job.total_lines = result.get("total", 0); job.finished_at = datetime.datetime.utcnow()
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            job = db.session.get(IngestionJob, job_id)
+            if job:
+                job.status = "failed"; job.error = str(exc)[:4000]; job.finished_at = datetime.datetime.utcnow(); db.session.commit()
+
+@app.route("/analyse/async", methods=["POST"])
+@login_required
+def analyse_async():
+    user = get_current_user()
+    env = request.form.get("env", "PROD")
+    query = request.form.get("query", "")
+    raw = request.form.get("raw_paste", "")
+    fname = "paste"
+    if "logfile" in request.files:
+        f = request.files.get("logfile")
+        if f and f.filename:
+            if not allowed_file(f.filename):
+                return jsonify({"error":"Unsupported file type"}), 400
+            fname = secure_filename(f.filename)
+            raw = f.read().decode("utf-8", errors="replace")
+    if not raw:
+        return jsonify({"error":"No log content provided"}), 400
+    job = IngestionJob(user_id=user.id, source="file", filename=fname, status="queued", total_bytes=len(raw.encode("utf-8", errors="ignore")))
+    db.session.add(job); db.session.commit()
+    threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, fname), daemon=True).start()
+    return jsonify({"job_id": job.id, "status":"queued"}), 202
+
+@app.route("/ingestion-jobs/<int:job_id>")
+@login_required
+def ingestion_job_status(job_id):
+    user = get_current_user()
+    job = IngestionJob.query.filter_by(id=job_id, user_id=user.id).first_or_404()
+    return jsonify({"id":job.id,"status":job.status,"filename":job.filename,"bytes":job.total_bytes,"lines":job.total_lines,"error":job.error,"started_at":job.started_at.isoformat() if job.started_at else None,"finished_at":job.finished_at.isoformat() if job.finished_at else None})
+
 # ── API ingestion (Bearer auth) ───────────────────────────────────────────────
 @app.route("/api/v1/logs/ingest", methods=["POST"])
 def api_ingest():
@@ -1157,7 +1338,7 @@ def api_ingest():
     if not auth.startswith("Bearer "):
         return jsonify({"error": "Missing token. Use Authorization: Bearer <OBSERVEX_API_KEY>"}), 401
     key  = auth.split(" ", 1)[1]
-    user = User.query.filter_by(api_key=key).first()
+    user = lookup_user_by_api_key(key)
     if not user:
         return jsonify({"error": "Invalid API key"}), 401
 
@@ -1257,9 +1438,16 @@ def alerts():
         return jsonify({"error": "Session expired. Please login again."}), 401
     uid = user.id
     if request.method == "POST":
-        data = request.get_json(force=True)
-        rule = AlertRule(user_id=uid, name=data["name"],
-                         condition=data["condition"], threshold=data["threshold"])
+        data = request.get_json(force=True, silent=True) or {}
+        name = str(data.get("name") or "").strip()[:100]
+        condition = str(data.get("condition") or "").strip()[:200]
+        try:
+            threshold = float(data.get("threshold"))
+        except Exception:
+            return jsonify({"error":"threshold must be a number"}), 400
+        if not name or not condition or threshold < 0 or threshold > 1000000:
+            return jsonify({"error":"name, condition and a valid non-negative threshold are required"}), 400
+        rule = AlertRule(user_id=uid, name=name, condition=condition, threshold=threshold)
         db.session.add(rule)
         db.session.commit()
         return jsonify({"id": rule.id, "name": rule.name})
@@ -1433,12 +1621,17 @@ def connectors():
     user = get_current_user()
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        c = SourceConnector(
-            user_id=user.id,
-            kind=str(data.get("kind") or "webhook")[:40],
-            name=str(data.get("name") or "Connector")[:120],
-            config_json=json.dumps(data.get("config") or {})[:4000],
-        )
+        allowed_kinds = {"s3", "cloudwatch", "mulesoft", "kafka", "webhook", "slack", "teams"}
+        kind = re.sub(r"[^a-z0-9_-]", "", str(data.get("kind") or "webhook").lower())[:40]
+        if kind not in allowed_kinds:
+            return jsonify({"error":"Unsupported connector type"}), 400
+        name = re.sub(r"[<>]", "", str(data.get("name") or "Connector").strip())[:120]
+        config = data.get("config") or {}
+        if not isinstance(config, dict):
+            return jsonify({"error":"config must be a JSON object"}), 400
+        # Never store common secret fields in connector config. Store them in Railway variables/secrets instead.
+        safe_config = {k:v for k,v in config.items() if str(k).lower() not in {"password","secret","token","api_key","access_key","secret_key"}}
+        c = SourceConnector(user_id=user.id, kind=kind, name=name, config_json=json.dumps(safe_config)[:4000])
         db.session.add(c)
         audit_event(user, "connector.create", c.name, {"kind": c.kind})
         db.session.commit()
@@ -1486,7 +1679,7 @@ def api_logs_search():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return jsonify({"error":"Missing token"}), 401
-    user = User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    user = lookup_user_by_api_key(auth.split(" ",1)[1])
     if not user:
         return jsonify({"error":"Invalid API key"}), 401
     q = request.args.get("q", "")
@@ -1511,7 +1704,7 @@ def api_trace_lookup(trace_id):
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return jsonify({"error":"Missing token"}), 401
-    user = User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    user = lookup_user_by_api_key(auth.split(" ",1)[1])
     if not user:
         return jsonify({"error":"Invalid API key"}), 401
     user_dir = os.path.join(UPLOAD_DIR, str(user.id))
@@ -1531,6 +1724,41 @@ def api_trace_lookup(trace_id):
     db.session.commit()
     return jsonify({"trace_id": trace_id, "rows": rows})
 
+
+
+@app.route("/api/v1/logs/nl-search", methods=["GET"])
+def api_natural_language_search():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error":"Missing token"}), 401
+    user = lookup_user_by_api_key(auth.split(" ",1)[1])
+    if not user:
+        return jsonify({"error":"Invalid API key"}), 401
+    nlq = request.args.get("q", "").strip()
+    structured = nlq
+    low = nlq.lower()
+    if "error" in low or "fail" in low:
+        structured += " level:ERROR"
+    if "warn" in low:
+        structured += " level:WARN"
+    m = re.search(r"(?:in|for)\s+([a-zA-Z0-9_.-]+(?:api|service|engine)[a-zA-Z0-9_.-]*)", nlq, re.I)
+    if m:
+        structured += f" app:{m.group(1)}"
+    return api_logs_search_with_query(structured.strip(), request.args.get("environment", "PROD"), int(request.args.get("limit", "200") or 200), user)
+
+def api_logs_search_with_query(q, env, limit, user):
+    limit = min(1000, max(1, int(limit)))
+    user_dir = os.path.join(UPLOAD_DIR, str(user.id))
+    raw = ""
+    if os.path.isdir(user_dir):
+        for name in sorted(os.listdir(user_dir))[-10:]:
+            if name.endswith(".masked.log"):
+                try:
+                    raw += f"\n--- FILE: {name} ---\n" + open(os.path.join(user_dir, name), encoding="utf-8", errors="replace").read()
+                except Exception:
+                    pass
+    result = analyse_log_text(raw, q, env, "api-search") if raw else {"log_rows": [], "total": 0}
+    return jsonify({"query": q, "total": result.get("total",0), "rows": result.get("log_rows",[])[:limit]})
 
 @app.route("/api/docs")
 def api_docs_page():
@@ -1742,7 +1970,7 @@ def view_shared_report(token):
 def api_ingest_async():
     auth=request.headers.get("Authorization","")
     if not auth.startswith("Bearer "): return jsonify({"error":"Missing token"}),401
-    user=User.query.filter_by(api_key=auth.split(" ",1)[1]).first()
+    user=lookup_user_by_api_key(auth.split(" ",1)[1])
     if not user: return jsonify({"error":"Invalid API key"}),401
     data=request.get_json(force=True, silent=True) or {}; raw=data.get("logs",""); app_n=data.get("application","api-source")
     job=IngestionJob(user_id=user.id, source="api", filename=app_n, total_bytes=len(raw.encode("utf-8", errors="ignore")), status="queued")
@@ -1773,9 +2001,12 @@ def rotate_api_key():
     user = get_current_user()
     if user is None:
         return jsonify({"error": "Session expired. Please login again."}), 401
-    user.api_key = secrets.token_hex(32)
+    raw, digest, prefix = generate_api_key()
+    user.api_key = None
+    user.api_key_hash = digest
+    user.api_key_prefix = prefix
     db.session.commit()
-    return jsonify({"api_key": user.api_key})
+    return jsonify({"api_key": raw, "prefix": prefix, "message": "Copy this key now. It is stored hashed and will not be shown again."})
 
 
 @app.route("/saved-searches", methods=["GET", "POST", "DELETE"])
