@@ -89,6 +89,17 @@
     <button class="btn btn-ghost" onclick="loadApiRegistry()">Refresh Registry</button>
   </div>
   <div id="api-registry-list" class="table-wrap" style="margin-top:14px;color:var(--tx2)">Loading registry…</div>
+  <div style="margin-top:18px;border-top:1px solid var(--bd);padding-top:14px">
+    <h4 style="margin:0 0 8px;font-size:13px;font-weight:900">📍 Curated Topology Flow</h4>
+    <p style="color:var(--tx2);font-size:12px;margin:0 0 10px">Source-of-truth flow used by System Map when auto-detection is incomplete.</p>
+    <textarea id="curated-flow-nodes" class="input mono" rows="6" style="width:100%;margin-bottom:10px" placeholder="One node per line, e.g.:&#10;Client&#10;GET /paymentEngine/loanDetails&#10;s-paymentengine-api&#10;Loan-Details&#10;Payment-Engine&#10;Response"></textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="previewCuratedFlow()">Preview Flow</button>
+      <button class="btn btn-ghost btn-sm" onclick="useSelectedTopology()">Use Selected Topology</button>
+      <button class="btn btn-primary btn-sm" onclick="pushTopologyToRegistry()" style="background:linear-gradient(135deg,rgba(167,139,250,.8),rgba(236,72,153,.6))">Push Topology → Registry</button>
+      <span id="push-topo-status" style="font-size:12px;color:var(--tx3)"></span>
+    </div>
+  </div>
 </div>
 <div class="three" style="margin-top:14px">
   <div class="card"><h3>Flow Confidence</h3><div id="flow-confidence" class="node-card">Select an endpoint to calculate confidence.</div></div>
@@ -277,6 +288,17 @@ function renderFlow(){
   loadSystemMap();
 }
 function switchArchTab(name,btn){document.querySelectorAll('.arch-panel').forEach(x=>x.classList.remove('active'));document.getElementById('arch-panel-'+name)?.classList.add('active');document.querySelectorAll('.arch-tab').forEach(x=>x.classList.remove('active'));btn?.classList.add('active');}
+async function autoBootFromDB(){
+  try{
+    const sessions = await safeJson(await fetch('/history')).catch(()=>[]);
+    const recent = (sessions || []).slice(0,3);
+    for(const sess of recent){
+      if(sess && sess.id){ await reloadSession(sess.id, sess.file || '').catch(()=>{}); }
+    }
+    if(recent.length){ renderAll(); renderFlow(); }
+  }catch(e){ console.warn('autoBootFromDB', e); }
+}
+
 async function loadSystemMap(){
   let env=document.getElementById('sm-env-filter')?.value||'';
   let url='/api/v1/system-map'+(env?'?env='+encodeURIComponent(env):'');
@@ -579,6 +601,7 @@ async function deleteHistory(id){
   await safeJson(await fetch('/history?id='+id,{method:'DELETE'}));
   loadHistory();
   loadSystemMap();
+  autoBootFromDB();
 }
 async function clearServerHistory(){
   if(confirm('Delete ALL saved sessions, log rows and system map data from Postgres?')){
@@ -718,11 +741,12 @@ function fillRegistryForm(id){
   byId('reg-api-name').value=r.api_name||''; byId('reg-env').value=r.environment||'PROD'; byId('reg-base-url').value=r.base_url||''; byId('reg-owner').value=r.owner||'';
   byId('reg-downstreams').value=(r.downstream_systems||[]).join(', ');
   byId('reg-endpoints').value=(r.endpoints||[]).map(e=>`${e.method||''} ${e.endpoint||'/'}`.trim()).join('\n');
+  if(byId('curated-flow-nodes')) byId('curated-flow-nodes').value=(r.manual_flow_nodes||[]).join('\n');
 }
 async function saveApiRegistry(){
   const api=(byId('reg-api-name')||{}).value?.trim(); if(!api){alert('API name is required');return;}
   const endpoints=((byId('reg-endpoints')||{}).value||'').split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const m=line.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$/i);return m?{method:m[1].toUpperCase(),endpoint:m[2].trim()}:{endpoint:line};});
-  const body={api_name:api,environment:(byId('reg-env')||{}).value||'PROD',base_url:(byId('reg-base-url')||{}).value||'',owner:(byId('reg-owner')||{}).value||'',downstream_systems:(byId('reg-downstreams')||{}).value||'',endpoints};
+  const body={api_name:api,environment:(byId('reg-env')||{}).value||'PROD',base_url:(byId('reg-base-url')||{}).value||'',owner:(byId('reg-owner')||{}).value||'',downstream_systems:(byId('reg-downstreams')||{}).value||'',manual_flow_nodes:(byId('curated-flow-nodes')||{}).value||'',endpoints};
   const res=await safeJson(await fetch('/api/v1/api-registry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   if(res.error){alert(res.error);return;} await loadApiRegistry(); await loadSystemMap(); alert('API Registry saved');
 }
@@ -988,7 +1012,45 @@ setInterval(refreshEnterprisePanels,15000);
 setTimeout(refreshEnterprisePanels,800);
 
 setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
+
+async function pushTopologyToRegistry(){
+  const apiName = document.getElementById('reg-api-name')?.value?.trim();
+  const env = document.getElementById('reg-env')?.value || 'PROD';
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const endpoint = document.getElementById('reg-endpoints')?.value?.split('\n')?.[0]?.trim() || '/';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!apiName || !nodes.length){ alert('Enter API name and flow nodes first'); return; }
+  const res = await safeJson(await fetch('/api/v1/topology/push',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_name:apiName, environment:env, endpoint, flow_nodes:nodes})
+  }));
+  if(res.error){ alert(res.error); return; }
+  const status = document.getElementById('push-topo-status');
+  if(status){ status.textContent = '✅ ' + (res.message || 'Topology saved'); status.style.color = '#86efac'; }
+  await loadApiRegistry?.();
+  await loadSystemMap?.();
+}
+function previewCuratedFlow(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _renderCleanFlowV2 === 'function') _renderCleanFlowV2(nodes,{architecture:{}});
+  else if(typeof renderArchitectureSvg === 'function') renderArchitectureSvg({architecture:{simple_flow:nodes}});
+}
+function useSelectedTopology(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _selectedEndpoint !== 'undefined' && _selectedEndpoint){
+    _selectedEndpoint.architecture = _selectedEndpoint.architecture || {};
+    _selectedEndpoint.architecture.simple_flow = nodes;
+    renderArchitectureSvg(_selectedEndpoint);
+  } else {
+    previewCuratedFlow();
+  }
+}
+
 </script>
 <script src="{{ url_for('static', filename='topology_upgrade.js') }}"></script>
-<script src="{{ url_for('static', filename='registry_flow_bridge.js') }}"></script>
 {% endblock %}

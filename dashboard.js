@@ -70,6 +70,17 @@ function renderFlow(){
   loadSystemMap();
 }
 function switchArchTab(name,btn){document.querySelectorAll('.arch-panel').forEach(x=>x.classList.remove('active'));document.getElementById('arch-panel-'+name)?.classList.add('active');document.querySelectorAll('.arch-tab').forEach(x=>x.classList.remove('active'));btn?.classList.add('active');}
+async function autoBootFromDB(){
+  try{
+    const sessions = await safeJson(await fetch('/history')).catch(()=>[]);
+    const recent = (sessions || []).slice(0,3);
+    for(const sess of recent){
+      if(sess && sess.id){ await reloadSession(sess.id, sess.file || '').catch(()=>{}); }
+    }
+    if(recent.length){ renderAll(); renderFlow(); }
+  }catch(e){ console.warn('autoBootFromDB', e); }
+}
+
 async function loadSystemMap(){
   let env=document.getElementById('sm-env-filter')?.value||'';
   let url='/api/v1/system-map'+(env?'?env='+encodeURIComponent(env):'');
@@ -358,6 +369,7 @@ async function deleteHistory(id){
   await safeJson(await fetch('/history?id='+id,{method:'DELETE'}));
   loadHistory();
   loadSystemMap();
+  autoBootFromDB();
 }
 async function clearServerHistory(){
   if(confirm('Delete ALL saved sessions, log rows and system map data from Postgres?')){
@@ -442,11 +454,12 @@ function fillRegistryForm(id){
   byId('reg-api-name').value=r.api_name||''; byId('reg-env').value=r.environment||'PROD'; byId('reg-base-url').value=r.base_url||''; byId('reg-owner').value=r.owner||'';
   byId('reg-downstreams').value=(r.downstream_systems||[]).join(', ');
   byId('reg-endpoints').value=(r.endpoints||[]).map(e=>`${e.method||''} ${e.endpoint||'/'}`.trim()).join('\n');
+  if(byId('curated-flow-nodes')) byId('curated-flow-nodes').value=(r.manual_flow_nodes||[]).join('\n');
 }
 async function saveApiRegistry(){
   const api=(byId('reg-api-name')||{}).value?.trim(); if(!api){alert('API name is required');return;}
   const endpoints=((byId('reg-endpoints')||{}).value||'').split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const m=line.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$/i);return m?{method:m[1].toUpperCase(),endpoint:m[2].trim()}:{endpoint:line};});
-  const body={api_name:api,environment:(byId('reg-env')||{}).value||'PROD',base_url:(byId('reg-base-url')||{}).value||'',owner:(byId('reg-owner')||{}).value||'',downstream_systems:(byId('reg-downstreams')||{}).value||'',endpoints};
+  const body={api_name:api,environment:(byId('reg-env')||{}).value||'PROD',base_url:(byId('reg-base-url')||{}).value||'',owner:(byId('reg-owner')||{}).value||'',downstream_systems:(byId('reg-downstreams')||{}).value||'',manual_flow_nodes:(byId('curated-flow-nodes')||{}).value||'',endpoints};
   const res=await safeJson(await fetch('/api/v1/api-registry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   if(res.error){alert(res.error);return;} await loadApiRegistry(); await loadSystemMap(); alert('API Registry saved');
 }
@@ -560,3 +573,42 @@ async function deleteSelectedHistory(){
 }
 
 setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
+
+
+async function pushTopologyToRegistry(){
+  const apiName = document.getElementById('reg-api-name')?.value?.trim();
+  const env = document.getElementById('reg-env')?.value || 'PROD';
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const endpoint = document.getElementById('reg-endpoints')?.value?.split('\n')?.[0]?.trim() || '/';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!apiName || !nodes.length){ alert('Enter API name and flow nodes first'); return; }
+  const res = await safeJson(await fetch('/api/v1/topology/push',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_name:apiName, environment:env, endpoint, flow_nodes:nodes})
+  }));
+  if(res.error){ alert(res.error); return; }
+  const status = document.getElementById('push-topo-status');
+  if(status){ status.textContent = '✅ ' + (res.message || 'Topology saved'); status.style.color = '#86efac'; }
+  await loadApiRegistry?.();
+  await loadSystemMap?.();
+}
+function previewCuratedFlow(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _renderCleanFlowV2 === 'function') _renderCleanFlowV2(nodes,{architecture:{}});
+  else if(typeof renderArchitectureSvg === 'function') renderArchitectureSvg({architecture:{simple_flow:nodes}});
+}
+function useSelectedTopology(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _selectedEndpoint !== 'undefined' && _selectedEndpoint){
+    _selectedEndpoint.architecture = _selectedEndpoint.architecture || {};
+    _selectedEndpoint.architecture.simple_flow = nodes;
+    renderArchitectureSvg(_selectedEndpoint);
+  } else {
+    previewCuratedFlow();
+  }
+}

@@ -516,3 +516,42 @@ window.renderArchitecture=function renderArchitecture(ep){
 })();
 
 console.log('[ObserveX] Topology Engine v2 loaded ✓');
+
+
+async function pushTopologyToRegistry(){
+  const apiName = document.getElementById('reg-api-name')?.value?.trim();
+  const env = document.getElementById('reg-env')?.value || 'PROD';
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const endpoint = document.getElementById('reg-endpoints')?.value?.split('\n')?.[0]?.trim() || '/';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!apiName || !nodes.length){ alert('Enter API name and flow nodes first'); return; }
+  const res = await safeJson(await fetch('/api/v1/topology/push',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_name:apiName, environment:env, endpoint, flow_nodes:nodes})
+  }));
+  if(res.error){ alert(res.error); return; }
+  const status = document.getElementById('push-topo-status');
+  if(status){ status.textContent = '✅ ' + (res.message || 'Topology saved'); status.style.color = '#86efac'; }
+  await loadApiRegistry?.();
+  await loadSystemMap?.();
+}
+function previewCuratedFlow(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _renderCleanFlowV2 === 'function') _renderCleanFlowV2(nodes,{architecture:{}});
+  else if(typeof renderArchitectureSvg === 'function') renderArchitectureSvg({architecture:{simple_flow:nodes}});
+}
+function useSelectedTopology(){
+  const nodesText = document.getElementById('curated-flow-nodes')?.value || '';
+  const nodes = nodesText.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!nodes.length){ alert('Enter flow nodes first'); return; }
+  if(typeof _selectedEndpoint !== 'undefined' && _selectedEndpoint){
+    _selectedEndpoint.architecture = _selectedEndpoint.architecture || {};
+    _selectedEndpoint.architecture.simple_flow = nodes;
+    renderArchitectureSvg(_selectedEndpoint);
+  } else {
+    previewCuratedFlow();
+  }
+}
