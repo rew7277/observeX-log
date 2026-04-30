@@ -253,6 +253,7 @@ class ApiRegistry(db.Model):
     owner        = db.Column(db.String(120), default="")
     status       = db.Column(db.String(40), default="active")
     downstream_systems_json = db.Column(db.Text, default="[]")
+    flow_steps_json = db.Column(db.Text, default="[]")   # Manual/curated topology flow steps from API Registry
     last_seen_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     created_at   = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     __table_args__ = (db.UniqueConstraint("user_id", "api_name", "environment", name="uq_api_registry_user_api_env"),)
@@ -592,6 +593,7 @@ def ensure_runtime_columns():
             "ALTER TABLE log_session ADD COLUMN IF NOT EXISTS result_json TEXT DEFAULT '{}'",
             "ALTER TABLE api_flow_map ADD COLUMN IF NOT EXISTS architecture_json TEXT DEFAULT '{}'",
             "ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS downstream_systems_json TEXT DEFAULT '[]'",
+            "ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS flow_steps_json TEXT DEFAULT '[]'",
         ]
     else:
         existing_user = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
@@ -612,6 +614,7 @@ def ensure_runtime_columns():
         try:
             existing_ar = {row[1] for row in db.session.execute(text("PRAGMA table_info(api_registry)")).fetchall()}
             if "downstream_systems_json" not in existing_ar: stmts.append("ALTER TABLE api_registry ADD COLUMN downstream_systems_json TEXT DEFAULT '[]'")
+            if "flow_steps_json" not in existing_ar: stmts.append("ALTER TABLE api_registry ADD COLUMN flow_steps_json TEXT DEFAULT '[]'")
         except Exception:
             pass
     for stmt in stmts:
@@ -3248,12 +3251,17 @@ def api_system_map():
             ep_key = ep.endpoint or "/"
             if ep_key not in data["endpoints"]:
                 endpoint_step = (str(ep.method or '').upper() + ' ' + str(ep.endpoint or '/')).strip()
-                reg_flow = ['Client', endpoint_step, reg.api_name] + [_meaningful_flow_name(x) for x in _json_loads_safe(reg.downstream_systems_json, [])]
-                reg_flow = [x for x in reg_flow if x and x != ' ']
-                if not any(str(x).lower() == 'response' for x in reg_flow):
-                    reg_flow.append('Response')
-                traces, matrix = _synthetic_trace_and_matrix(reg_flow, ep.request_count or 1, ep.error_count or 0, ep.avg_latency_ms or 0)
-                reg_arch = _sanitize_architecture_for_response(reg.api_name, {'simple_flow': reg_flow, 'traces': traces, 'matrix': matrix, 'hints': ['Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency.']}, ep.request_count or 0, ep.error_count or 0, ep.avg_latency_ms or 0)
+                manual_flow = _json_loads_safe(getattr(reg, "flow_steps_json", "[]"), [])
+                if manual_flow:
+                    reg_flow = _parse_manual_flow_steps(manual_flow, api_name=reg.api_name, endpoint=endpoint_step)
+                    reg_arch = _architecture_from_registry_flow(reg.api_name, reg_flow, ep.request_count or 1, ep.error_count or 0, ep.avg_latency_ms or 0)
+                else:
+                    reg_flow = [reg.api_name, endpoint_step] + [_meaningful_flow_name(x) for x in _json_loads_safe(reg.downstream_systems_json, [])]
+                    reg_flow = [x for x in reg_flow if x and x != ' ']
+                    if not any(str(x).lower() == 'response' for x in reg_flow):
+                        reg_flow.append('Response')
+                    traces, matrix = _synthetic_trace_and_matrix(reg_flow, ep.request_count or 1, ep.error_count or 0, ep.avg_latency_ms or 0)
+                    reg_arch = _sanitize_architecture_for_response(reg.api_name, {'simple_flow': reg_flow, 'traces': traces, 'matrix': matrix, 'hints': ['Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency.']}, ep.request_count or 0, ep.error_count or 0, ep.avg_latency_ms or 0)
                 data["endpoints"][ep_key] = {
                     "endpoint": ep_key,
                     "method": ep.method,
@@ -3266,6 +3274,16 @@ def api_system_map():
                     "environment": ep.environment,
                     "session_id": None,
                 }
+            else:
+                # V42: curated Registry flow overrides noisy/incomplete auto-detected topology for the same endpoint.
+                manual_flow = _json_loads_safe(getattr(reg, "flow_steps_json", "[]"), [])
+                if manual_flow:
+                    endpoint_step = (str(ep.method or '').upper() + ' ' + str(ep.endpoint or '/')).strip()
+                    reg_flow = _parse_manual_flow_steps(manual_flow, api_name=reg.api_name, endpoint=endpoint_step)
+                    reg_arch = _architecture_from_registry_flow(reg.api_name, reg_flow, data["endpoints"][ep_key].get("request_count") or ep.request_count or 1, data["endpoints"][ep_key].get("error_count") or ep.error_count or 0, data["endpoints"][ep_key].get("avg_latency_ms") or ep.avg_latency_ms or 0)
+                    data["endpoints"][ep_key]["flow_steps"] = reg_arch.get("simple_flow", reg_flow)
+                    data["endpoints"][ep_key]["architecture"] = reg_arch
+                    data["endpoints"][ep_key]["registry_flow_applied"] = True
 
     result = []
     for api_name, data in api_map.items():
@@ -3285,6 +3303,112 @@ def api_system_map():
     return jsonify({"apis": result, "total_apis": len(result)})
 
 
+
+
+
+
+# ── V42 Registry ↔ Topology bridge helpers ────────────────────────────────
+def _parse_manual_flow_steps(value, api_name: str = "", endpoint: str = ""):
+    """Parse curated flow from Registry. Accepts list, newline text, comma text, or arrow chain."""
+    raw = []
+    if isinstance(value, list):
+        raw = value
+    elif isinstance(value, str):
+        txt = value.replace("→", "\n").replace("=>", "\n")
+        raw = [x.strip() for x in re.split(r"[\n,]+", txt) if x.strip()]
+    steps = []
+    for x in raw:
+        x = str(x).strip()
+        if not x:
+            continue
+        # Allow user to paste numbered lines: "1. Client" / "- API"
+        x = re.sub(r"^[-*\d.\)\s]+", "", x).strip()
+        if not x:
+            continue
+        if _looks_like_processor_event_name(x):
+            continue
+        steps.append(_clean_service_name(x))
+    if endpoint and endpoint != "/" and not any(str(x).lower().startswith(("get ","post ","put ","delete ","patch ")) for x in steps):
+        steps.insert(0, endpoint)
+    if api_name and not any(str(x).lower() == str(api_name).lower() for x in steps):
+        steps.insert(0, api_name)
+    if not any(str(x).lower() in ("response", "response exit") for x in steps):
+        steps.append("Response")
+    # Remove duplicated boundary nodes while preserving order
+    out = []
+    for x in steps:
+        if x and not any(str(y).lower() == str(x).lower() for y in out):
+            out.append(x)
+    return out[:24]
+
+
+def _architecture_from_registry_flow(api_name: str, flow_steps: list, request_count: int = 0, error_count: int = 0, avg_latency_ms: int = 0):
+    """Build a topology payload directly from curated Registry flow steps."""
+    flow = _parse_manual_flow_steps(flow_steps, api_name=api_name)
+    nodes = []
+    for i, name in enumerate(flow):
+        err_here = int(error_count or 0) if i == max(0, len(flow)-2) else 0
+        lat_here = int(avg_latency_ms or 0) if 0 < i < len(flow)-1 else 0
+        nodes.append({
+            "id": name, "name": name, "tier": _service_tier(name),
+            "count": int(request_count or 0) if i == 0 else max(1, int(request_count or 1)),
+            "errors": err_here, "warns": 0, "avg_latency_ms": lat_here,
+            "health": "critical" if err_here else ("warn" if lat_here > 2000 else "ok"),
+        })
+    edges = []
+    for a, b in zip(flow, flow[1:]):
+        eerr = int(error_count or 0) if b == flow[-2] and len(flow) > 2 else 0
+        elat = int(avg_latency_ms or 0) if b == flow[-2] and len(flow) > 2 else 0
+        edges.append({
+            "from": a, "to": b, "count": max(1, int(request_count or 1)),
+            "errors": eerr, "avg_latency_ms": elat,
+            "error_rate": round(eerr / max(1, int(request_count or 1)) * 100, 1),
+            "label": "registry-flow",
+        })
+    traces, matrix = _synthetic_trace_and_matrix(flow, request_count or 1, error_count or 0, avg_latency_ms or 0)
+    return {
+        "simple_flow": flow,
+        "nodes": nodes,
+        "edges": edges,
+        "traces": traces,
+        "matrix": matrix,
+        "tiers": sorted(set(_service_tier(x) for x in flow), key=lambda t: {"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}.get(t,9)),
+        "hints": ["Topology is using curated API Registry flow. Upload/re-analyse logs to enrich traces and latency.", "Use Push to Registry from System Map to save detected topology as the new source of truth."],
+        "confidence": 92,
+        "source": "api-registry-flow",
+    }
+
+
+def _sync_registry_flow_to_maps(user_id: int, reg: ApiRegistry):
+    """Materialise Registry flow into ApiFlowMap rows so System Map can consume it immediately."""
+    manual_flow = _json_loads_safe(getattr(reg, "flow_steps_json", "[]"), [])
+    if not manual_flow:
+        return 0
+    eps = ApiEndpoint.query.filter_by(user_id=user_id, api_name=reg.api_name, environment=reg.environment).all()
+    if not eps:
+        ep = ApiEndpoint(user_id=user_id, api_registry_id=reg.id, api_name=reg.api_name, environment=reg.environment, endpoint="/", method="")
+        db.session.add(ep)
+        db.session.flush()
+        eps = [ep]
+    touched = 0
+    for ep in eps:
+        flow = _parse_manual_flow_steps(manual_flow, api_name=reg.api_name, endpoint=(str(ep.method or "").upper()+" "+str(ep.endpoint or "/")).strip())
+        arch = _architecture_from_registry_flow(reg.api_name, flow, ep.request_count or 1, ep.error_count or 0, ep.avg_latency_ms or 0)
+        fm = ApiFlowMap.query.filter_by(user_id=user_id, api_name=reg.api_name, environment=reg.environment, endpoint=ep.endpoint or "/", method=ep.method or "").first()
+        if not fm:
+            # session_id is nullable in some existing DBs? Model says not null, use latest session when available, else skip materialized map.
+            latest = LogSession.query.filter_by(user_id=user_id).order_by(LogSession.created_at.desc()).first()
+            if not latest:
+                continue
+            fm = ApiFlowMap(user_id=user_id, session_id=latest.id, api_name=reg.api_name, environment=reg.environment, endpoint=ep.endpoint or "/", method=ep.method or "")
+            db.session.add(fm)
+        fm.flow_steps_json = json.dumps(flow)
+        fm.architecture_json = json.dumps(arch, default=str)
+        fm.request_count = ep.request_count or fm.request_count or 1
+        fm.error_count = ep.error_count or fm.error_count or 0
+        fm.avg_latency_ms = ep.avg_latency_ms or fm.avg_latency_ms or 0
+        touched += 1
+    return touched
 
 
 @app.route("/api/v1/api-registry", methods=["GET", "POST", "DELETE"])
@@ -3336,6 +3460,15 @@ def api_registry_inventory():
             downstream = [x.strip() for x in re.split(r"[,\n]", downstream) if x.strip()]
         if downstream:
             reg.downstream_systems_json = json.dumps([str(x)[:160] for x in downstream if str(x).strip()])
+        manual_flow = data.get("flow_steps") or data.get("flow") or data.get("flow_text") or []
+        parsed_flow = _parse_manual_flow_steps(manual_flow, api_name=api_name)
+        if parsed_flow and len(parsed_flow) > 1:
+            reg.flow_steps_json = json.dumps(parsed_flow[:24])
+            # Also keep downstream chips aligned with manual flow when user did not provide downstreams.
+            if not downstream:
+                derived_downstreams = [x for x in parsed_flow if x not in {api_name, "Client", "Response"} and not re.match(r"^(GET|POST|PUT|DELETE|PATCH)\s", str(x), re.I)]
+                if derived_downstreams:
+                    reg.downstream_systems_json = json.dumps(derived_downstreams[:16])
         reg.last_seen_at = datetime.datetime.utcnow()
         endpoints = data.get("endpoints") or []
         db.session.flush()
@@ -3350,7 +3483,8 @@ def api_registry_inventory():
                 db.session.add(ep)
             ep.api_registry_id = reg.id
             ep.last_seen_at = datetime.datetime.utcnow()
-        audit_event(user, "api_registry.upsert", api_name, {"environment": env, "endpoints": len(endpoints)})
+        synced = _sync_registry_flow_to_maps(user.id, reg)
+        audit_event(user, "api_registry.upsert", api_name, {"environment": env, "endpoints": len(endpoints), "flow_steps": len(_json_loads_safe(getattr(reg, "flow_steps_json", "[]"), [])), "synced_flow_maps": synced})
         db.session.commit()
         return jsonify({"status": "saved", "id": reg.id, "api_name": reg.api_name, "environment": reg.environment})
     env = request.args.get("env", "").strip().upper()
@@ -3363,8 +3497,53 @@ def api_registry_inventory():
         if not _is_valid_api_inventory_name(r.api_name):
             continue
         eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=r.api_name, environment=r.environment).order_by(ApiEndpoint.request_count.desc()).all()
-        output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "downstream_systems": _json_loads_safe(r.downstream_systems_json, []), "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
+        output.append({"id": r.id, "api_name": r.api_name, "environment": r.environment, "base_url": r.base_url, "owner": r.owner, "status": r.status, "downstream_systems": _json_loads_safe(r.downstream_systems_json, []), "flow_steps": _json_loads_safe(getattr(r, "flow_steps_json", "[]"), []), "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None, "endpoints": [{"endpoint": e.endpoint, "method": e.method, "request_count": e.request_count, "error_count": e.error_count, "avg_latency_ms": e.avg_latency_ms} for e in eps]})
     return jsonify({"apis": output, "total": len(output)})
+
+
+
+@app.route("/api/v1/api-registry/push-flow", methods=["POST"])
+@login_required
+def api_registry_push_flow():
+    """Save currently detected System Map topology back into the API Registry."""
+    user = get_current_user()
+    data = request.get_json(force=True, silent=True) or {}
+    api_name = _clean_service_name(data.get("api_name") or "")
+    if not api_name:
+        return jsonify({"error": "api_name is required"}), 400
+    env = str(data.get("environment") or "PROD").upper()[:20]
+    flow_steps = _parse_manual_flow_steps(data.get("flow_steps") or data.get("simple_flow") or [], api_name=api_name)
+    if len(flow_steps) < 2:
+        return jsonify({"error": "No usable topology flow was supplied"}), 400
+    reg = ApiRegistry.query.filter_by(user_id=user.id, api_name=api_name, environment=env).first()
+    if not reg:
+        reg = ApiRegistry(user_id=user.id, api_name=api_name, environment=env)
+        db.session.add(reg)
+        db.session.flush()
+    reg.owner = str(data.get("owner") or reg.owner or "")[:120]
+    reg.base_url = str(data.get("base_url") or reg.base_url or "")[:400]
+    reg.flow_steps_json = json.dumps(flow_steps[:24])
+    # Save non-boundary stages as downstream chips for Registry table readability.
+    boundaries = {api_name.lower(), "client", "response", "request entry", "response exit"}
+    downstream = [x for x in flow_steps if str(x).lower() not in boundaries and not re.match(r"^(GET|POST|PUT|DELETE|PATCH)\s", str(x), re.I)]
+    if downstream:
+        reg.downstream_systems_json = json.dumps(downstream[:16])
+    # Add endpoint if supplied.
+    endpoint = _normalise_endpoint(data.get("endpoint") or "/")
+    method = str(data.get("method") or "").upper()[:10]
+    ep = ApiEndpoint.query.filter_by(user_id=user.id, api_name=api_name, environment=env, endpoint=endpoint, method=method).first()
+    if not ep:
+        ep = ApiEndpoint(user_id=user.id, api_registry_id=reg.id, api_name=api_name, environment=env, endpoint=endpoint, method=method)
+        db.session.add(ep)
+    ep.api_registry_id = reg.id
+    ep.request_count = max(int(ep.request_count or 0), int(data.get("request_count") or 0))
+    ep.error_count = max(int(ep.error_count or 0), int(data.get("error_count") or 0))
+    ep.avg_latency_ms = max(int(ep.avg_latency_ms or 0), int(data.get("avg_latency_ms") or 0))
+    reg.last_seen_at = datetime.datetime.utcnow()
+    synced = _sync_registry_flow_to_maps(user.id, reg)
+    audit_event(user, "api_registry.push_flow", api_name, {"environment": env, "flow_steps": len(flow_steps), "synced_flow_maps": synced})
+    db.session.commit()
+    return jsonify({"status": "saved", "id": reg.id, "api_name": reg.api_name, "environment": reg.environment, "flow_steps": flow_steps, "synced_flow_maps": synced})
 
 
 
