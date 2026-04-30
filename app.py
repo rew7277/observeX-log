@@ -424,6 +424,8 @@ class IngestionJob(db.Model):
     total_bytes = db.Column(db.Integer, default=0)
     total_lines = db.Column(db.Integer, default=0)
     error       = db.Column(db.Text, default="")
+    session_id  = db.Column(db.Integer, db.ForeignKey("log_session.id"), nullable=True, index=True)
+    progress    = db.Column(db.Integer, default=0)  # 0-100; dashboard uses this while polling
     started_at  = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)
     created_at  = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -602,6 +604,8 @@ def ensure_runtime_columns():
             "ALTER TABLE api_flow_map ADD COLUMN IF NOT EXISTS architecture_json TEXT DEFAULT '{}'",
             "ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS downstream_systems_json TEXT DEFAULT '[]'",
             "ALTER TABLE api_registry ADD COLUMN IF NOT EXISTS manual_flow_nodes_json TEXT DEFAULT '[]'",
+            "ALTER TABLE ingestion_job ADD COLUMN IF NOT EXISTS session_id INTEGER",
+            "ALTER TABLE ingestion_job ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0",
         ]
     else:
         existing_user = {row[1] for row in db.session.execute(text("PRAGMA table_info(user)")).fetchall()}
@@ -612,6 +616,12 @@ def ensure_runtime_columns():
             existing_ls = {row[1] for row in db.session.execute(text("PRAGMA table_info(log_session)")).fetchall()}
             if "log_rows_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN log_rows_json TEXT DEFAULT '[]'")
             if "result_json" not in existing_ls: stmts.append("ALTER TABLE log_session ADD COLUMN result_json TEXT DEFAULT '{}'")
+        except Exception:
+            pass
+        try:
+            existing_ij = {row[1] for row in db.session.execute(text("PRAGMA table_info(ingestion_job)")).fetchall()}
+            if "session_id" not in existing_ij: stmts.append("ALTER TABLE ingestion_job ADD COLUMN session_id INTEGER")
+            if "progress" not in existing_ij: stmts.append("ALTER TABLE ingestion_job ADD COLUMN progress INTEGER DEFAULT 0")
         except Exception:
             pass
         try:
@@ -2581,7 +2591,22 @@ def trace_rows_db(user_id, trace_id, env="ALL", limit=1000):
     return query_log_events_db(user_id, env=env, trace_id=trace_id, limit=limit), None
 
 def _job_json(job):
-    return {"id": job.id, "status": job.status, "filename": job.filename, "bytes": job.total_bytes, "lines": job.total_lines, "error": job.error, "started_at": job.started_at.isoformat() if job.started_at else None, "finished_at": job.finished_at.isoformat() if job.finished_at else None}
+    session_id = getattr(job, "session_id", None)
+    progress = getattr(job, "progress", 0) or (100 if job.status == "success" else 0)
+    return {
+        "id": job.id,
+        "status": job.status,
+        "filename": job.filename,
+        "bytes": job.total_bytes,
+        "lines": job.total_lines,
+        "error": job.error,
+        "session_id": session_id,
+        "progress": progress,
+        "rows_url": f"/api/v1/sessions/{session_id}/rows" if session_id else None,
+        "result_url": f"/api/v1/sessions/{session_id}/rows" if session_id else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
 
 def maybe_create_incident_from_rows(user_id, rows, env="PROD", session_id=None):
     if not rows: return None
@@ -2718,8 +2743,9 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
         if not job:
             return
         try:
-            job.status = "running"; job.started_at = datetime.datetime.utcnow(); db.session.commit()
+            job.status = "running"; job.progress = 10; job.started_at = datetime.datetime.utcnow(); db.session.commit()
             result = analyse_log_text(raw, query, env, filename, user_id)
+            job.progress = 45; db.session.commit()
             rows_to_store = result.get("log_rows", [])[:5000]
             result_summary = {k: v for k, v in result.items() if k != "log_rows"}
             ls = LogSession(user_id=user_id, environment=env, filename=filename,
@@ -2729,19 +2755,21 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
                             log_rows_json=json.dumps(rows_to_store, default=str),
                             result_json=json.dumps(result_summary, default=str))
             db.session.add(ls); db.session.flush()
+            job.session_id = ls.id; job.total_lines = result.get("total", 0); job.progress = 60; db.session.commit()
             flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user_id)
             for fm in flow_maps:
                 db.session.add(fm)
             persist_observability_indexes(user_id, ls.id, rows_to_store, raw, env, filename, flow_maps)
+            job.progress = 85; db.session.commit()
             maybe_create_incident_from_rows(user_id, rows_to_store, env, ls.id)
             persist_raw_upload(user_id, ls.id, filename, raw)
-            job.status = "success"; job.total_lines = result.get("total", 0); job.finished_at = datetime.datetime.utcnow()
+            job.status = "success"; job.total_lines = result.get("total", 0); job.session_id = ls.id; job.progress = 100; job.finished_at = datetime.datetime.utcnow()
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
             job = db.session.get(IngestionJob, job_id)
             if job:
-                job.status = "failed"; job.error = str(exc)[:4000]; job.finished_at = datetime.datetime.utcnow(); db.session.commit()
+                job.status = "failed"; job.error = str(exc)[:4000]; job.progress = 100; job.finished_at = datetime.datetime.utcnow(); db.session.commit()
 
 @app.route("/analyse/async", methods=["POST"])
 @login_required
