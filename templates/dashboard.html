@@ -396,15 +396,6 @@ function renderArchitectureSvg(ep){
     .filter(Boolean)
     .map(x=>String(x).replace(/^processor[:=\-\s]+/i,'').replace(/\/processors?\/\d+.*/i,'').replace(/-event-\d+-[0-9a-f].*/i,''))
     .map(x=>String(x).trim()).filter(x=>x && !['common','default','logging','logger','mule-subflow'].includes(x.toLowerCase())).filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
-  if(cleanFlow.length>=3){
-    const cards=cleanFlow.map((step,i)=>{
-      const low=String(step).toLowerCase();
-      const tier=i===0||/client/.test(low)?'Client':/response/.test(low)?'Response':/api/.test(low)?'API':/external|service|flexcube|http|soap/.test(low)?'External':'Flow';
-      return `<div class="clean-flow-step ${tier.toLowerCase()}"><div class="clean-flow-index">${i+1}</div><b>${esc(step)}</b><span>${tier}</span></div>`;
-    }).join('<div class="clean-flow-arrow">→</div>');
-    setHTML('flow-diagram',`<div class="clean-flow-wrap"><div class="clean-flow-title">Clean execution topology</div><div class="clean-flow-lane">${cards}</div><div class="clean-flow-note">Processor event IDs are hidden. Registry rows now show only real APIs; processor executions are grouped into these logical flow steps.</div></div>`);
-    return;
-  }
   if(!nodes.length){
     setHTML('flow-diagram',(ep.flow_steps||[]).map((s,i,a)=>`<span class="flow-node">${esc(s)}</span>${i<a.length-1?'<span class="flow-arrow">→</span>':''}`).join('')||'No topology detected for this endpoint.');
     return;

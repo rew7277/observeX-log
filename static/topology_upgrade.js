@@ -185,9 +185,67 @@ function _normalizeFlowOrder(nodes){
   return cleaned;
 }
 
+// ─── Client-side topology synthesis from active uploaded rows ───────────────
+function _topoLabelFromToken(s){
+  s = String(s || '').split('?')[0]
+    .replace(/^https?:\/\//i, '')
+    .replace(/\..*$/, '')
+    .replace(/\/.*$/, '');
+  s = s.replace(/[-_]+/g, ' ').replace(/\b(api|svc|service)\b/ig, '').trim();
+  return s.split(/\s+/).filter(Boolean).map(w => /^(kyc|cbs|lms|upi|bbps)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ').slice(0, 80);
+}
+function _topoRowSignals(rows, ep){
+  const text = (rows || []).slice(0, 1200).map(r => [r.message, r.flow, r.app, r.endpoint].filter(Boolean).join(' ')).join('\n');
+  const found = [];
+  const add = x => { if (x && !found.some(y => y.toLowerCase() === String(x).toLowerCase())) found.push(x); };
+  const checks = [
+    [/\bkyc\b|aadhaar|aadhar|pan.?verify|ckyc/i, 'KYC Provider'],
+    [/credit.?bureau|cibil|experian|equifax|crif/i, 'Credit Bureau'],
+    [/\bcbs\b|core.?banking|finacle|flexcube|fcubs/i, 'CBS / Core Banking'],
+    [/\blms\b|loan.?management|loan.?details/i, 'LMS'],
+    [/\bbbps\b|bill.?payment/i, 'BBPS'], [/\bsetu\b/i, 'Setu'], [/\bupi\b|vpa/i, 'UPI Gateway'],
+    [/salesforce|sfdc/i, 'Salesforce'], [/kafka|event.?bus|message.?broker/i, 'Message Broker'],
+    [/redis/i, 'Redis Cache'], [/oracle|mysql|postgres|mongodb|dynamodb/i, 'Database']
+  ];
+  checks.forEach(([re, label]) => { if (re.test(text)) add(label); });
+  const urlRe = /https?:\/\/([^\/\s"'?,;]+)|(?:target|service|downstream|dependency|host|baseUrl|url|uri)\s*[:=]\s*["']?([^\s"',;{}]+)/ig;
+  let m;
+  while ((m = urlRe.exec(text))) {
+    const label = _topoLabelFromToken(m[1] || m[2] || '');
+    if (label && !/^(Http|Https|Localhost|Request|Response|Api|Www)$/i.test(label)) add(label);
+  }
+  if (found.includes('Credit Bureau')) ['Credit Score', 'CRIF SMS'].forEach(x => { const i = found.indexOf(x); if (i >= 0) found.splice(i, 1); });
+  return found.slice(0, 8);
+}
+function _buildClientTopologyFromRows(ep, arch){
+  const rows = (window._allRows || []); if (!rows.length) return null;
+  const epText = String(ep?.endpoint || arch?.endpoint || '').toLowerCase().replace(/^\//, '');
+  let scoped = rows.filter(r => !epText || [r.endpoint, r.flow, r.api, r.app, r.message].some(v => String(v || '').toLowerCase().includes(epText)));
+  if (scoped.length < 3) scoped = rows;
+  const first = (arch?.simple_flow && arch.simple_flow[0]) || ep?.api || ep?.app || scoped.find(r => r.app)?.app || 'Application';
+  let flow = [first];
+  const method = (arch?.method || ep?.method || '').toUpperCase();
+  const endpoint = arch?.endpoint || ep?.endpoint || '';
+  if (method && endpoint && endpoint !== '/') flow.push(method + ' ' + endpoint);
+  _topoRowSignals(scoped, ep).forEach(x => flow.push(x));
+  flow.push('Response');
+  flow = _normalizeFlowOrder(flow.filter((x, i, a) => x && a.findIndex(y => String(y).toLowerCase() === String(x).toLowerCase()) === i));
+  if (flow.length < 3) return null;
+  const errors = scoped.filter(r => ['ERROR', 'FAILURE'].includes(String(r.level || '').toUpperCase())).length;
+  const lats = scoped.map(r => Number(r.latency || 0)).filter(Boolean);
+  const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : 0;
+  const tierOf = s => { const low = String(s).toLowerCase(); if (low === 'response') return 'Client'; if (/^(get|post|put|delete|patch) /.test(low)) return 'Gateway'; if (/database|redis|oracle|mysql|postgres|mongo|dynamo/.test(low)) return 'Data'; if (/salesforce|bureau|cbs|core|lms|provider|gateway|bbps|setu|upi|message broker/.test(low)) return 'External'; return flow.indexOf(s) === 0 ? 'API' : 'Service'; };
+  const nodes = flow.map((name, i) => ({ id: name, name, tier: tierOf(name), count: scoped.length, errors: (i === flow.length - 2 ? errors : 0), warns: 0, avg_latency_ms: (i > 0 && i < flow.length - 1 ? avg : 0), health: errors && i === flow.length - 2 ? 'critical' : 'ok' }));
+  const edges = flow.slice(0, -1).map((from, i) => ({ from, to: flow[i + 1], count: Math.max(1, scoped.length), errors: (i === flow.length - 3 ? errors : 0), avg_latency_ms: i ? avg : 0, label: 'calls', error_rate: Math.round(errors / Math.max(1, scoped.length) * 1000) / 10 }));
+  return { nodes, edges, simple_flow: flow, endpoint: endpoint || '/', method, hints: ['Client-side topology synthesis used active uploaded rows to enrich sparse backend flow.'] };
+}
+
 // ─── MAIN: renderArchitectureSvg (replaces old version) ───────────────────
 function renderArchitectureSvg(ep){
-  const arch=ep.architecture||{};
+  let arch=ep.architecture||{};
+  const sparse=!(arch.nodes||[]).length || ((arch.simple_flow||[]).length<=3);
+  const clientArch=sparse ? _buildClientTopologyFromRows(ep, arch) : null;
+  if(clientArch){ arch=Object.assign({}, arch, clientArch); ep.architecture=arch; }
   let nodes=arch.nodes||[], edges=arch.edges||[];
 
   // Fallback: render clean pill-chain if no graph nodes

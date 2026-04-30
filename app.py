@@ -2345,17 +2345,17 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
     matrix=[{'from':e['from'],'to':e['to'],'calls':e['count'],'errors':e['errors'],'avg_latency_ms':e['avg_latency_ms'],'error_rate':e['error_rate']} for e in edges]
     tiers=sorted(set(n['tier'] for n in nodes), key=lambda t: {'Client':0,'Gateway':1,'API':2,'Service':3,'External':4,'Data':5}.get(t,9))
     return {'nodes':nodes,'edges':edges,'traces':traces,'matrix':matrix,'tiers':tiers,'simple_flow':flow,'endpoint':ep or endpoint or '/','method':method,'hints':['V40: topology is built from event-grouped Mule ENTRY/CALL/processor/EXIT semantics.','Upload response is lighter; large raw files are saved asynchronously to keep 10MB uploads fast.','Registry delete is available and processor/event pseudo APIs are filtered.']}
-# ── V41 Topology Engine v2 integration ───────────────────────────────────────
+# ── V42 Topology Engine v4 integration ───────────────────────────────────────
 # Overrides the older V40 topology functions with the uploaded v2 engine.
 # Existing call sites continue using extract_architecture_graph(...) normally.
 try:
-    from topology_engine_v3 import (
+    from topology_engine_v4 import (
         extract_architecture_graph,
         _build_clean_execution_flow,
         _extract_flow_steps_from_mule_rows,
     )
 except Exception as _topology_v2_error:
-    app.logger.exception("Topology Engine v3 import failed; falling back to bundled V40 engine")
+    app.logger.exception("Topology Engine v4 import failed; falling back to bundled V40 engine")
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
