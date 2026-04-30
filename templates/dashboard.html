@@ -92,7 +92,7 @@
   <div style="margin-top:18px;border-top:1px solid var(--bd);padding-top:14px">
     <h4 style="margin:0 0 8px;font-size:13px;font-weight:900">📍 Curated Topology Flow</h4>
     <p style="color:var(--tx2);font-size:12px;margin:0 0 10px">Source-of-truth flow used by System Map when auto-detection is incomplete.</p>
-    <textarea id="curated-flow-nodes" class="input mono" rows="6" style="width:100%;margin-bottom:10px" placeholder="One node per line, e.g.:&#10;Client&#10;GET /paymentEngine/loanDetails&#10;s-paymentengine-api&#10;Loan-Details&#10;Payment-Engine&#10;Response"></textarea>
+    <textarea id="curated-flow-nodes" class="input mono" rows="6" style="width:100%;margin-bottom:10px" placeholder="Example: s-gupshup-api → Request Entry → GET /verify-otp:s-gupshup-api-config.CPU-LITE → Verify OTP → Gupshup → Response Exit"></textarea>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-ghost btn-sm" onclick="previewCuratedFlow()">Preview Flow</button>
       <button class="btn btn-ghost btn-sm" onclick="useSelectedTopology()">Use Selected Topology</button>

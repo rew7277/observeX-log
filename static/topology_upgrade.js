@@ -555,3 +555,220 @@ function useSelectedTopology(){
     previewCuratedFlow();
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ObserveX V6.1 — Non-blocking upload + editable curated topology chain
+// ═══════════════════════════════════════════════════════════════════════════
+(function(){
+  function $id(id){ return document.getElementById(id); }
+  function _htmlEsc(s){ return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+
+  window.parseCuratedFlowNodes = function parseCuratedFlowNodes(text){
+    return String(text||'')
+      .split(/\s*(?:→|->|=>|\n|\r|,)\s*/g)
+      .map(x=>x.trim())
+      .filter(Boolean)
+      .filter((x,i,a)=>i===0 || x.toLowerCase()!==a[i-1].toLowerCase());
+  };
+
+  function titleFromEndpoint(ep){
+    const raw=String(ep||'/').split('?')[0].replace(/^\/+|\/+$/g,'');
+    const last=(raw.split('/').filter(Boolean).pop()||'Request').replace(/[-_]+/g,' ');
+    return last.replace(/\b\w/g,m=>m.toUpperCase());
+  }
+
+  function findCurrentApi(){
+    const name=$id('sm-api-select')?.value || $id('reg-api-name')?.value || '';
+    return ((_smData&&_smData.apis)||[]).find(a=>a.api_name===name) || null;
+  }
+
+  function findCurrentEndpoint(){
+    if(typeof _selectedEndpoint!=='undefined' && _selectedEndpoint) return _selectedEndpoint;
+    const api=findCurrentApi();
+    const epVal=$id('sm-endpoint-select')?.value || '';
+    if(!api) return null;
+    return epVal ? (api.endpoints||[]).find(e=>(e.endpoint||'/')===epVal) : (api.endpoints||[])[0];
+  }
+
+  window.buildSuggestedCuratedFlow = function buildSuggestedCuratedFlow(ep, api){
+    api = api || findCurrentApi() || {};
+    ep = ep || findCurrentEndpoint() || {};
+    const apiName = api.api_name || $id('sm-api-select')?.value || $id('reg-api-name')?.value || ep.api || 'API';
+    const method = String(ep.method || 'GET').toUpperCase();
+    const endpoint = ep.endpoint || '/';
+    const routeNode = `${method} ${endpoint}:${apiName}-config.CPU-LITE`;
+    const operation = titleFromEndpoint(endpoint);
+    const arch = ep.architecture || {};
+    const existing = (arch.simple_flow || ep.flow_steps || []).filter(Boolean);
+    const names = (arch.nodes || []).map(n=>n.name||n.id).filter(Boolean);
+    const all = [...existing, ...names];
+    const lowApi = apiName.toLowerCase();
+    const external = all.find(n=>{
+      const low=String(n).toLowerCase();
+      if(!low || low===lowApi) return false;
+      if(/client|response|entry|exit|request|cpu|config|verify|validate/.test(low)) return false;
+      return /gupshup|bbps|setu|upi|flexcube|lms|cbs|bank|gateway|vendor|external|payment-engine|loan-details/.test(low);
+    }) || (lowApi.includes('gupshup') ? 'Gupshup' : 'External System');
+    const chain=[apiName,'Request Entry',routeNode,operation,external,'Response Exit'];
+    return chain.filter((x,i,a)=>x && (i===0 || String(x).toLowerCase()!==String(a[i-1]).toLowerCase()));
+  };
+
+  function tierForCuratedNode(name, idx, total){
+    const low=String(name||'').toLowerCase();
+    if(idx===0 || /-api\b|api$|mule/.test(low)) return 'API';
+    if(/request entry|response exit|client|response/.test(low)) return idx===1?'Gateway':'Client';
+    if(/^\s*(get|post|put|patch|delete)\s+/.test(low) || /config\.cpu/.test(low)) return 'Gateway';
+    if(/db|database|redis|cache|oracle|postgres|mysql|mongo/.test(low)) return 'Data';
+    if(/gupshup|bbps|setu|upi|flexcube|lms|cbs|bank|gateway|vendor|external|salesforce|s3|kafka/.test(low)) return 'External';
+    return 'Service';
+  }
+
+  window.curatedFlowToArchitecture = function curatedFlowToArchitecture(nodes, baseEp){
+    nodes = (nodes||[]).filter(Boolean);
+    const req = Number(baseEp?.request_count || 1), err = Number(baseEp?.error_count || 0), lat = Number(baseEp?.avg_latency_ms || 0);
+    const graphNodes = nodes.map((n,i)=>({
+      id:n, name:n, tier:tierForCuratedNode(n,i,nodes.length),
+      count:i===0?req:1, errors:(err && i===nodes.length-2)?err:0, warns:0,
+      avg_latency_ms:(i===nodes.length-2)?lat:0,
+      health:(err && i===nodes.length-2)?'critical':'ok'
+    }));
+    const edges=[];
+    for(let i=0;i<nodes.length-1;i++){
+      edges.push({from:nodes[i], to:nodes[i+1], count:req||1, errors:(err && i===nodes.length-2)?err:0, avg_latency_ms:(i===nodes.length-2)?lat:0, error_rate:req?Math.round(err/req*1000)/10:0, label:'curated'});
+    }
+    const traces=[{trace:baseEp?.sample_trace||'curated-flow', api:nodes[0], endpoint:baseEp?.endpoint||'/', errors:err, latency:lat, rows:nodes.map((n,i)=>({service:n, level:(err&&i===nodes.length-2)?'ERROR':'INFO', message:i===0?'API entry':'Curated topology hop', latency:i===nodes.length-2?lat:0, start_ms:i*20, duration_ms:i===nodes.length-2?lat:20}))}];
+    return {simple_flow:nodes, nodes:graphNodes, edges, traces, matrix:edges.map(e=>({from:e.from,to:e.to,calls:e.count,errors:e.errors,avg_latency_ms:e.avg_latency_ms,error_rate:e.error_rate})), hints:['Curated topology is editable. Changes here update this topology preview instantly and can be pushed to Registry.']};
+  };
+
+  window.renderCuratedTopologyLive = function renderCuratedTopologyLive(){
+    const txt=$id('curated-flow-nodes')?.value || '';
+    const nodes=parseCuratedFlowNodes(txt);
+    if(!nodes.length) return;
+    const ep=findCurrentEndpoint() || {};
+    const preview=Object.assign({}, ep, {architecture:curatedFlowToArchitecture(nodes, ep), flow_steps:nodes});
+    if(typeof renderArchitectureSvg==='function') renderArchitectureSvg(preview);
+    if(typeof renderTraceWaterfall==='function') renderTraceWaterfall(preview);
+    if(typeof renderCallMatrix==='function') renderCallMatrix(preview);
+    const hints=$id('flow-hints');
+    if(hints) hints.innerHTML='<b>Editable curated flow</b><br>'+nodes.map(x=>`<span class="flow-node">${_htmlEsc(x)}</span>`).join('<span class="flow-arrow">→</span>')+'<br><br>Click <b>Push → Registry</b> to make this source-of-truth after refresh.';
+  };
+
+  window.fillCuratedTopologyFromSelectedEndpoint = function fillCuratedTopologyFromSelectedEndpoint(force){
+    const box=$id('curated-flow-nodes');
+    if(!box) return;
+    const api=findCurrentApi(); const ep=findCurrentEndpoint();
+    if(!api || !ep) return;
+    const arch=ep.architecture||{};
+    const manual=(arch.simple_flow||ep.flow_steps||[]).filter(Boolean);
+    const suggested=buildSuggestedCuratedFlow(ep, api);
+    const finalNodes=(force || !box.value.trim()) ? suggested : parseCuratedFlowNodes(box.value);
+    box.value=finalNodes.join(' → ');
+    $id('reg-api-name') && ($id('reg-api-name').value=api.api_name||'');
+    $id('reg-env') && ($id('reg-env').value=ep.environment||api.environments?.[0]||'PROD');
+    renderCuratedTopologyLive();
+  };
+
+  // Override existing buttons to support arrow-separated chains and live graph render.
+  window.previewCuratedFlow=function previewCuratedFlow(){
+    const nodes=parseCuratedFlowNodes($id('curated-flow-nodes')?.value||'');
+    if(!nodes.length){ alert('Enter flow nodes first'); return; }
+    renderCuratedTopologyLive();
+  };
+
+  window.useSelectedTopology=function useSelectedTopology(){
+    const nodes=parseCuratedFlowNodes($id('curated-flow-nodes')?.value||'');
+    if(!nodes.length){ alert('Enter flow nodes first'); return; }
+    const ep=findCurrentEndpoint() || {};
+    const arch=curatedFlowToArchitecture(nodes, ep);
+    if(typeof _selectedEndpoint!=='undefined' && _selectedEndpoint){
+      _selectedEndpoint.architecture=arch;
+      _selectedEndpoint.flow_steps=nodes;
+    }
+    renderCuratedTopologyLive();
+  };
+
+  window.pushTopologyToRegistry=async function pushTopologyToRegistry(){
+    const api=findCurrentApi(); const ep=findCurrentEndpoint() || {};
+    const apiName=($id('reg-api-name')?.value || api?.api_name || '').trim();
+    const env=$id('reg-env')?.value || ep.environment || api?.environments?.[0] || 'PROD';
+    const nodes=parseCuratedFlowNodes($id('curated-flow-nodes')?.value||'');
+    if(!apiName || !nodes.length){ alert('Select API and enter topology flow first'); return; }
+    const res=await safeJson(await fetch('/api/v1/topology/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_name:apiName, environment:env, endpoint:ep.endpoint||'/', method:ep.method||'', flow_nodes:nodes})}));
+    if(res.error){ alert(res.error); return; }
+    const st=$id('push-topo-status'); if(st){ st.textContent='✅ Saved. Topology will stay after refresh.'; st.style.color='#86efac'; }
+    if(typeof _selectedEndpoint!=='undefined' && _selectedEndpoint){ _selectedEndpoint.architecture=curatedFlowToArchitecture(nodes,_selectedEndpoint); _selectedEndpoint.flow_steps=nodes; }
+    renderCuratedTopologyLive();
+    if(typeof loadApiRegistry==='function') loadApiRegistry().catch(()=>{});
+  };
+
+  // Wrap System Map selection handlers so the curated box follows API/endpoint clicks.
+  const oldApiChange=window.onSmApiChange;
+  if(typeof oldApiChange==='function'){
+    window.onSmApiChange=function(){ oldApiChange.apply(this,arguments); setTimeout(()=>fillCuratedTopologyFromSelectedEndpoint(true),80); };
+  }
+  const oldEpChange=window.onSmEndpointChange;
+  if(typeof oldEpChange==='function'){
+    window.onSmEndpointChange=function(){ oldEpChange.apply(this,arguments); setTimeout(()=>fillCuratedTopologyFromSelectedEndpoint(true),80); };
+  }
+
+  document.addEventListener('input', function(e){
+    if(e.target && e.target.id==='curated-flow-nodes') renderCuratedTopologyLive();
+  });
+
+  // Non-blocking large upload: upload returns once queued; analysis continues in background.
+  window.uploadFiles = async function uploadFiles(files){
+    if(!files || !files.length) return;
+    const LARGE_FILE_BYTES=5*1024*1024;
+    const status=$id('upload-status'); const bar=$id('upload-progress');
+    let total=[...files].reduce((a,f)=>a+f.size,0), done=0;
+    const activePolls=[];
+    async function poll(jobId,file){
+      for(let i=0;i<240;i++){
+        await new Promise(r=>setTimeout(r,2000));
+        let job;
+        try{ job=await safeJson(await fetch('/ingestion-jobs/'+jobId)); }catch(e){ continue; }
+        if(status) status.textContent=`Background analysis: ${file.name} · ${job.status||'queued'}${job.lines?` · ${job.lines} lines`:''}`;
+        if(job.status==='success'){
+          const hist=await safeJson(await fetch('/history')).catch(()=>[]);
+          const latest=(hist||[]).find(x=>String(x.file||'').includes(file.name)) || (hist||[])[0];
+          if(latest && typeof reloadSession==='function') await reloadSession(latest.id, latest.file||file.name).catch(()=>{});
+          if(typeof loadSystemMap==='function') await loadSystemMap().catch(()=>{});
+          if(status) status.textContent=`Analysis complete for ${file.name}. Dataset has ${(_allRows||[]).length} parsed records.`;
+          return;
+        }
+        if(job.status==='failed'){ if(status) status.textContent=`Analysis failed for ${file.name}: ${job.error||'Unknown error'}`; return; }
+      }
+      if(status) status.textContent=`Analysis still running for ${file.name}. Use Upload History to reload once complete.`;
+    }
+    for(const file of [...files]){
+      const fd=new FormData(); fd.append('env',$id('env')?.value||'PROD'); fd.append('logfile',file);
+      try{
+        if(file.size>=LARGE_FILE_BYTES){
+          if(status) status.textContent=`Uploading ${file.name} in fast queue mode…`;
+          const queued=await safeJson(await fetch('/analyse/async',{method:'POST',body:fd}));
+          if(!queued.job_id) throw new Error(queued.error||'Unable to queue ingestion');
+          if(status) status.textContent=`Upload queued in background for ${file.name}. You can continue using the app.`;
+          activePolls.push(poll(queued.job_id,file));
+        }else{
+          if(status) status.textContent=`Uploading ${file.name}…`;
+          const d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));
+          if(typeof addSession==='function') addSession(d,file.name,file.size);
+          if(typeof loadSystemMap==='function') await loadSystemMap().catch(()=>{});
+        }
+      }catch(e){ alert(file.name+': '+e.message); }
+      done+=file.size; if(bar) bar.style.width=Math.round(done/Math.max(1,total)*100)+'%';
+    }
+    if(status) status.textContent=activePolls.length ? 'Upload accepted. Analysis is running in background.' : `Upload complete. Active dataset contains ${(_allRows||[]).length} parsed log record(s).`;
+  };
+
+  // Improve placeholder/help text without requiring HTML changes.
+  setTimeout(()=>{
+    const box=$id('curated-flow-nodes');
+    if(box){
+      box.placeholder='Example:\ns-gupshup-api → Request Entry → GET /verify-otp:s-gupshup-api-config.CPU-LITE → Verify OTP → Gupshup → Response Exit';
+      box.title='Use arrows or one node per line. The topology graphic updates while you edit.';
+    }
+  },500);
+
+  console.log('[ObserveX] V6.1 fast queue + editable topology loaded ✓');
+})();

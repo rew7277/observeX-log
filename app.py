@@ -3355,7 +3355,7 @@ def api_registry_inventory():
             reg.downstream_systems_json = json.dumps([str(x)[:160] for x in downstream if str(x).strip()])
         manual_nodes = data.get("manual_flow_nodes") or data.get("flow_nodes") or data.get("curated_flow") or []
         if isinstance(manual_nodes, str):
-            manual_nodes = [x.strip() for x in re.split(r"[,\n]", manual_nodes) if x.strip()]
+            manual_nodes = [x.strip() for x in re.split(r"(?:→|->|=>|,|\n)", manual_nodes) if x.strip()]
         if manual_nodes:
             clean_nodes = []
             for node in manual_nodes:
@@ -3405,7 +3405,7 @@ def push_topology_to_registry():
     env = str(data.get("environment") or data.get("env") or "PROD").upper()[:20]
     raw_nodes = data.get("flow_nodes") or data.get("manual_flow_nodes") or data.get("nodes") or []
     if isinstance(raw_nodes, str):
-        raw_nodes = [x.strip() for x in re.split(r"[,\\n]", raw_nodes) if x.strip()]
+        raw_nodes = [x.strip() for x in re.split(r"(?:→|->|=>|,|\n)", raw_nodes) if x.strip()]
     nodes = []
     for node in raw_nodes:
         node = str(node or "").strip()[:180]
@@ -3428,8 +3428,28 @@ def push_topology_to_registry():
     db.session.flush()
     ep = ApiEndpoint.query.filter_by(user_id=user.id, api_name=api_name, environment=env, endpoint=endpoint_path, method=method).first()
     if not ep:
-        db.session.add(ApiEndpoint(user_id=user.id, api_registry_id=reg.id, api_name=api_name, environment=env, endpoint=endpoint_path, method=method))
-    audit_event(user, "topology.push", api_name, {"environment": env, "nodes": len(nodes)})
+        ep = ApiEndpoint(user_id=user.id, api_registry_id=reg.id, api_name=api_name, environment=env, endpoint=endpoint_path, method=method)
+        db.session.add(ep)
+
+    # V6.1: immediately update existing System Map rows for the selected endpoint,
+    # so the edited curated flow changes the topology graphic after refresh too.
+    try:
+        fmap_q = ApiFlowMap.query.filter_by(user_id=user.id, api_name=api_name, environment=env, endpoint=endpoint_path)
+        if method:
+            fmap_q = fmap_q.filter(ApiFlowMap.method.ilike(method))
+        for fm in fmap_q.all():
+            traces, matrix = _synthetic_trace_and_matrix(nodes, fm.request_count or ep.request_count or 1, fm.error_count or ep.error_count or 0, fm.avg_latency_ms or ep.avg_latency_ms or 0)
+            fm.flow_steps_json = json.dumps(nodes[:40])
+            fm.architecture_json = json.dumps({
+                "simple_flow": nodes[:40],
+                "traces": traces,
+                "matrix": matrix,
+                "hints": ["Curated topology pushed from API Registry and applied to this endpoint."]
+            }, default=str)
+    except Exception:
+        app.logger.exception("Could not update existing ApiFlowMap after topology push")
+
+    audit_event(user, "topology.push", api_name, {"environment": env, "endpoint": endpoint_path, "method": method, "nodes": len(nodes)})
     db.session.commit()
     return jsonify({"status": "saved", "message": "Topology saved successfully", "api_name": api_name, "environment": env, "nodes": nodes})
 
