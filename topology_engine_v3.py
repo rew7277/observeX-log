@@ -159,13 +159,12 @@ def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) ->
 
 
 def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = "", endpoint: str = "") -> dict:
-    # Temporarily redirect v2's per-trace flow builder to V3, then call v2 main graph builder.
-    old = v2._extract_flow_steps_from_mule_rows
-    v2._extract_flow_steps_from_mule_rows = _extract_flow_steps_from_mule_rows
-    try:
-        arch = v2.extract_architecture_graph(rows, raw, env, session_id, user_id, api_name, endpoint)
-    finally:
-        v2._extract_flow_steps_from_mule_rows = old
+    # V7: pass the V3 flow extractor as a callback instead of monkey-patching v2.
+    # This is thread-safe for parallel uploads because no shared module function is replaced.
+    arch = v2.extract_architecture_graph(
+        rows, raw, env, session_id, user_id, api_name, endpoint,
+        flow_extractor=_extract_flow_steps_from_mule_rows,
+    )
 
     flow = arch.get('simple_flow') or []
     raw_low = str(raw or '').lower()

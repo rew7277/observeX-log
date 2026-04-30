@@ -775,18 +775,25 @@ def percentile(values, pct):
 
 
 def detect_level(line: str):
-    if re.search(r"\b(DEBUG|TRACE)\b", line, re.I):
-        return "DEBUG"
-    if re.search(r"\b(SUCCESS|SUCCEEDED|COMPLETED|OK)\b|\b2\d\d\b", line, re.I):
-        return "SUCCESS"
-    if re.search(r"\b(FAIL|FAILED|FAILURE)\b", line, re.I):
-        return "FAILURE"
-    if re.search(r"\b(ERROR|FATAL|SEVERE)\b|exception|timeout|gateway timeout|bad request|\b5\d\d\b", line, re.I):
-        return "ERROR"
-    if re.search(r"\b(WARN|WARNING)\b|retry|slow|\b4\d\d\b", line, re.I):
-        return "WARN"
-    return "INFO"
+    """Classify log severity without treating random numbers as HTTP status codes.
 
+    V7 fix: earlier logic marked any bare 2xx number as SUCCESS, so messages like
+    'fetched 200 records after downstream timeout' could be counted incorrectly.
+    Error/failure signals now win over success signals, and HTTP codes are only
+    considered when they appear in an HTTP/status context.
+    """
+    text = str(line or "")
+    if re.search(r"\b(ERROR|FATAL|SEVERE)\b|exception|gateway timeout|timeout|bad request|connection refused|unavailable|\bHTTP(?:\/\d(?:\.\d)?)?\s*5\d\d\b|\bstatus(?:Code)?[=:\s]+5\d\d\b|\bresponse(?:Code|Status)?[=:\s]+5\d\d\b", text, re.I):
+        return "ERROR"
+    if re.search(r"\b(FAIL|FAILED|FAILURE)\b", text, re.I):
+        return "FAILURE"
+    if re.search(r"\b(WARN|WARNING)\b|retry|slow|\bHTTP(?:\/\d(?:\.\d)?)?\s*4\d\d\b|\bstatus(?:Code)?[=:\s]+4\d\d\b|\bresponse(?:Code|Status)?[=:\s]+4\d\d\b", text, re.I):
+        return "WARN"
+    if re.search(r"\b(DEBUG|TRACE)\b", text, re.I):
+        return "DEBUG"
+    if re.search(r"\b(SUCCESS|SUCCEEDED|COMPLETED|OK)\b|\bHTTP(?:\/\d(?:\.\d)?)?\s*2\d\d\b|\bstatus(?:Code)?[=:\s]+2\d\d\b|\bresponse(?:Code|Status)?[=:\s]+2\d\d\b", text, re.I):
+        return "SUCCESS"
+    return "INFO"
 def extract_first(patterns, text, default=""):
     for pat in patterns:
         m = re.search(pat, text, re.I | re.S)
@@ -3234,7 +3241,17 @@ def api_system_map():
         rq = rq.filter(ApiRegistry.environment.ilike(env_filter))
     if api_filter:
         rq = rq.filter(ApiRegistry.api_name.ilike(f"%{api_filter}%"))
-    for reg in rq.order_by(ApiRegistry.last_seen_at.desc()).all():
+    regs = rq.order_by(ApiRegistry.last_seen_at.desc()).all()
+    reg_names = [r.api_name for r in regs]
+    endpoint_q = ApiEndpoint.query.filter_by(user_id=user.id)
+    if env_filter:
+        endpoint_q = endpoint_q.filter(ApiEndpoint.environment.ilike(env_filter))
+    if reg_names:
+        endpoint_q = endpoint_q.filter(ApiEndpoint.api_name.in_(reg_names))
+    endpoints_by_key = {}
+    for ep in endpoint_q.all() if reg_names else []:
+        endpoints_by_key.setdefault((ep.api_name, ep.environment), []).append(ep)
+    for reg in regs:
         if not _is_valid_api_inventory_name(reg.api_name):
             continue
         data = api_map.setdefault(reg.api_name, {
@@ -3253,7 +3270,7 @@ def api_system_map():
         data["status"] = reg.status or data.get("status", "active")
         data["downstream_systems"] = sorted(set(data.get("downstream_systems", []) + _json_loads_safe(reg.downstream_systems_json, [])))
         data["environments"].add(reg.environment or "PROD")
-        registry_eps = ApiEndpoint.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).all()
+        registry_eps = endpoints_by_key.get((reg.api_name, reg.environment), [])
         if not data.get("total_requests"):
             data["total_requests"] = sum(int(e.request_count or 0) for e in registry_eps)
             data["total_errors"] = sum(int(e.error_count or 0) for e in registry_eps)

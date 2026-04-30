@@ -515,7 +515,7 @@ def _synthetic_trace_and_matrix(flow: list, req_count: int, err_count: int, avg_
 # ── Main entry point (replaces extract_architecture_graph in app.py) ───────
 def extract_architecture_graph(
     rows: list, raw: str, env: str, session_id: int, user_id: int,
-    api_name: str = "", endpoint: str = "",
+    api_name: str = "", endpoint: str = "", flow_extractor=None,
 ) -> dict:
     """
     Build a complete architecture graph from log rows.
@@ -549,7 +549,8 @@ def extract_architecture_graph(
 
     # Build flow
     if source_rows:
-        flow, method, ep = _extract_flow_steps_from_mule_rows(api_name, source_rows, endpoint)
+        extractor = flow_extractor or _extract_flow_steps_from_mule_rows
+        flow, method, ep = extractor(api_name, source_rows, endpoint)
         endpoint = ep or endpoint or "/"
     else:
         api = _clean_service_name(api_name) or "Application"
