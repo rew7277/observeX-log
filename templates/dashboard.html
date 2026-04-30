@@ -302,7 +302,7 @@ function renderArchitectureSvg(ep){
   const cleanFlow=(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]))
     .filter(Boolean)
     .map(x=>String(x).replace(/^processor[:=\-\s]+/i,'').replace(/\/processors?\/\d+.*/i,'').replace(/-event-\d+-[0-9a-f].*/i,''))
-    .map(x=>String(x).trim()).filter(x=>x && !['client','common','default','logging','logger','mule-subflow','external-service'].includes(x.toLowerCase())).filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
+    .map(x=>String(x).trim()).filter(x=>x && !['common','default','logging','logger','mule-subflow'].includes(x.toLowerCase())).filter((x,i,a)=>x && a.findIndex(y=>y.toLowerCase()===x.toLowerCase())===i);
   if(cleanFlow.length>=3){
     const cards=cleanFlow.map((step,i)=>{
       const low=String(step).toLowerCase();
@@ -937,10 +937,21 @@ async function loadApiRegistry(){
   const html='<div class="registry-toolbar"><div><b>'+list.length+' grouped API entries</b><div class="muted-note">Duplicate processor/event rows are collapsed. Open details only when required.</div></div><button class="btn btn-ghost btn-sm" onclick="loadApiRegistry()">Refresh</button></div><table><thead><tr><th>API / Group</th><th>Env</th><th>Owner</th><th>Health</th><th>Downstream</th><th>Endpoints</th><th>Action</th></tr></thead><tbody>'+ (list.map((g,idx)=>{
     const ds=[...g.downstream]; const tags=ds.slice(0,3).map(x=>'<span class="chip">'+esc(clipText(x,24))+'</span>').join('')+(ds.length>3?'<span class="muted-note">+'+(ds.length-3)+' more</span>':'');
     const first=g.rows[0]||{}; const health=g.rows.length>10?'Watch':'OK';
-    return '<tr><td><div class="registry-name"><b>'+esc(g.name)+'</b></div><div class="registry-sub">'+g.rows.length+' raw detected row(s) collapsed</div></td><td>'+esc([...g.envs].join(', '))+'</td><td>'+esc(g.owner||'Unassigned')+'</td><td><span class="badge badge-'+(health==='OK'?'ok':'warn')+'">'+health+'</span></td><td class="registry-tags">'+(tags||'—')+'</td><td>'+g.endpoints+'</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm('+first.id+')">Edit</button></td></tr><tr><td colspan="7"><details class="compact-section"><summary>Show raw rows for '+esc(g.name)+'</summary><div class="compact-body raw-preview">'+g.rows.slice(0,15).map(r=>'• '+esc(r.api_name)+' · endpoints '+((r.endpoints||[]).length)).join('\n')+(g.rows.length>15?'\n+'+(g.rows.length-15)+' more rows':'')+'</div></details></td></tr>';
+    return '<tr><td><div class="registry-name"><b>'+esc(g.name)+'</b></div><div class="registry-sub">'+g.rows.length+' raw detected row(s) collapsed</div></td><td>'+esc([...g.envs].join(', '))+'</td><td>'+esc(g.owner||'Unassigned')+'</td><td><span class="badge badge-'+(health==='OK'?'ok':'warn')+'">'+health+'</span></td><td class="registry-tags">'+(tags||'—')+'</td><td>'+g.endpoints+'</td><td><button class="btn btn-ghost btn-sm" onclick="fillRegistryForm('+first.id+')">Edit</button> <button class="btn btn-ghost btn-sm danger" onclick="deleteApiRegistry('+first.id+',\''+esc(g.name).replace(/'/g,'&#39;')+'\')">Delete</button></td></tr><tr><td colspan="7"><details class="compact-section"><summary>Show raw rows for '+esc(g.name)+'</summary><div class="compact-body raw-preview">'+g.rows.slice(0,15).map(r=>'• '+esc(r.api_name)+' · endpoints '+((r.endpoints||[]).length)).join('\n')+(g.rows.length>15?'\n+'+(g.rows.length-15)+' more rows':'')+'</div></details></td></tr>';
   }).join('') || '<tr><td colspan="7">No registry found. Add one above.</td></tr>') + '</tbody></table>';
   setHTML('api-registry-list',html);
 }
+
+// V39 final registry delete helper: used by grouped registry table.
+async function deleteApiRegistry(id,name){
+  if(!id){alert('No registry id found for this row');return;}
+  if(!confirm('Delete API Registry entry: '+(name||id)+'? Uploaded log files are not deleted.')) return;
+  const res=await safeJson(await fetch('/api/v1/api-registry',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}));
+  if(res.error){alert(res.error);return;}
+  await loadApiRegistry();
+  await loadSystemMap();
+}
+
 // Re-wrap renderResult to replace noisy details with summaries.
 const _v34RenderResult = renderResult;
 renderResult=function(d){

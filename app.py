@@ -2067,17 +2067,23 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
 
 # ── V38 Mule flow teaching + registry delete fixes ───────────────────────────
 def _extract_mule_route_from_text(text: str):
-    msg = str(text or '')
-    m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):\\([^:\s\]]+)', msg, re.I)
-    if not m:
-        m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):/([^:\s\]]+)', msg, re.I)
+    """Extract Mule API, HTTP method and route from log text.
+
+    Handles real Mule route variants such as:
+    [s-api].get:\paymentEngine\loanDetails:s-api-config
+    [s-api].post:\loan\receipt:application\json:s-api-config
+    [s-api].post:/htmltopdfv2:text\html:s-api-config/processors/2
+    """
+    msg = str(text or '').replace('\r', '\\r')
+    m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):(.+?)(?:-config|\s|\]|\)|@)', msg, re.I)
     if not m:
         return '', '', ''
     api = _clean_service_name(m.group(1))
     method = m.group(2).upper()
-    path = m.group(3)
-    path = re.split(r':(?:application|text|multipart|json|xml)', path, maxsplit=1)[0]
-    path = path.replace('\\\\', '/').replace('\\', '/').replace('//', '/').strip('/')
+    path = m.group(3).strip()
+    path = re.split(r':(?:application|text|multipart|json|xml)', path, maxsplit=1, flags=re.I)[0]
+    path = re.sub(r'/processors/.*$', '', path, flags=re.I)
+    path = path.replace('\\', '/').replace('//', '/').strip('/ :')
     endpoint = '/' + path if path else '/'
     endpoint = _normalise_endpoint(endpoint) or '/'
     return api, method, endpoint
@@ -3135,11 +3141,13 @@ def api_system_map():
         for ep in registry_eps:
             ep_key = ep.endpoint or "/"
             if ep_key not in data["endpoints"]:
-                reg_flow = [reg.api_name] + [_meaningful_flow_name(x) for x in _json_loads_safe(reg.downstream_systems_json, [])]
-                reg_flow = [x for x in reg_flow if x]
+                endpoint_step = (str(ep.method or '').upper() + ' ' + str(ep.endpoint or '/')).strip()
+                reg_flow = ['Client', endpoint_step, reg.api_name] + [_meaningful_flow_name(x) for x in _json_loads_safe(reg.downstream_systems_json, [])]
+                reg_flow = [x for x in reg_flow if x and x != ' ']
                 if not any(str(x).lower() == 'response' for x in reg_flow):
                     reg_flow.append('Response')
-                reg_arch = _sanitize_architecture_for_response(reg.api_name, {'simple_flow': reg_flow, 'hints': ['Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency.']}, ep.request_count or 0, ep.error_count or 0, ep.avg_latency_ms or 0)
+                traces, matrix = _synthetic_trace_and_matrix(reg_flow, ep.request_count or 1, ep.error_count or 0, ep.avg_latency_ms or 0)
+                reg_arch = _sanitize_architecture_for_response(reg.api_name, {'simple_flow': reg_flow, 'traces': traces, 'matrix': matrix, 'hints': ['Flow is enriched from API Registry. Upload logs to generate detailed trace waterfall and per-hop latency.']}, ep.request_count or 0, ep.error_count or 0, ep.avg_latency_ms or 0)
                 data["endpoints"][ep_key] = {
                     "endpoint": ep_key,
                     "method": ep.method,
@@ -3177,6 +3185,31 @@ def api_system_map():
 @login_required
 def api_registry_inventory():
     user = get_current_user()
+    if request.method == "DELETE":
+        data = request.get_json(force=True, silent=True) or {}
+        rid = data.get("id") or request.args.get("id")
+        api_name = data.get("api_name") or request.args.get("api_name")
+        env = str(data.get("environment") or request.args.get("environment") or "PROD").upper()[:20]
+        q = ApiRegistry.query.filter_by(user_id=user.id)
+        if rid:
+            try:
+                q = q.filter_by(id=int(rid))
+            except Exception:
+                return jsonify({"error":"Invalid registry id"}), 400
+        elif api_name:
+            q = q.filter_by(api_name=str(api_name), environment=env)
+        else:
+            return jsonify({"error":"id or api_name is required"}), 400
+        reg = q.first()
+        if not reg:
+            return jsonify({"error":"API registry entry not found"}), 404
+        ApiEndpoint.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        ApiFlowMap.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        FlowEdge.query.filter_by(user_id=user.id, api_name=reg.api_name, environment=reg.environment).delete(synchronize_session=False)
+        audit_event(user, "api_registry.delete", reg.api_name, {"environment": reg.environment})
+        db.session.delete(reg)
+        db.session.commit()
+        return jsonify({"status":"deleted", "id": rid, "api_name": api_name})
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
         api_name = _clean_service_name(data.get("api_name") or data.get("name") or "")
