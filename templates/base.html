@@ -27,6 +27,17 @@ a{color:var(--ac);text-decoration:none}
 a:hover{text-decoration:underline}
 .mono{font-family:'JetBrains Mono',monospace}
 
+body.light-theme{
+  --bg:#f7f8fc;--bg2:#eef1f7;--bg3:#e7ebf4;
+  --sf:#ffffff;--sf2:#f3f5fa;--sf3:#e9edf7;
+  --bd:rgba(20,30,60,.10);--bd2:rgba(20,30,60,.18);
+  --tx:#111827;--tx2:#4b5563;--tx3:#6b7280;
+  --shadow:0 20px 50px rgba(15,23,42,.10);
+}
+.theme-toggle{position:fixed;right:18px;bottom:18px;z-index:9998;border:1px solid var(--bd2);background:var(--sf);color:var(--tx);border-radius:999px;padding:10px 14px;font-weight:700;box-shadow:var(--shadow);cursor:pointer}
+.v9-progress{height:8px;border-radius:999px;background:var(--bg2);overflow:hidden;border:1px solid var(--bd)}
+.v9-progress>span{display:block;height:100%;width:0%;background:var(--grad);transition:width .25s ease}
+.incident-timeline{display:grid;gap:10px}.incident-timeline .step{border:1px solid var(--bd);background:var(--sf);border-radius:12px;padding:10px}
 /* Scrollbar */
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:var(--bg2)}
@@ -157,6 +168,20 @@ tr:hover td{background:var(--sf2)}
 {% block body %}{% endblock %}
 
 <script>
+(function(){
+  const saved = localStorage.getItem('observex_theme') || 'dark';
+  if(saved === 'light') document.body.classList.add('light-theme');
+  const btn = document.createElement('button');
+  btn.className='theme-toggle';
+  btn.type='button';
+  btn.textContent = saved === 'light' ? '🌙 Dark' : '☀️ Light';
+  btn.onclick = () => {
+    const light = document.body.classList.toggle('light-theme');
+    localStorage.setItem('observex_theme', light ? 'light' : 'dark');
+    btn.textContent = light ? '🌙 Dark' : '☀️ Light';
+  };
+  document.addEventListener('DOMContentLoaded',()=>document.body.appendChild(btn));
+})();
 // Auto-dismiss flash messages
 setTimeout(()=>{document.querySelectorAll('.flash-wrap').forEach(el=>el.remove())},4000)
 </script>

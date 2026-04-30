@@ -1,7 +1,7 @@
 import os, re, json, hashlib, secrets, datetime, threading, time
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, jsonify, flash, make_response, abort
+    session, jsonify, flash, make_response, abort, Response
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
@@ -57,6 +57,14 @@ def api_rate_limited(key, limit=120, window=60):
     return False
 
 
+
+@app.before_request
+def v9_login_bruteforce_guard():
+    if request.path == '/login' and request.method == 'POST':
+        ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or 'unknown').split(',')[0]
+        if api_rate_limited('login:' + ip, limit=int(os.environ.get('LOGIN_RATE_LIMIT_PER_MIN', '12')), window=60):
+            abort(429, 'Too many login attempts. Please try again shortly.')
+    return None
 # ── Config ────────────────────────────────────────────────────────────────────
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
@@ -2530,6 +2538,76 @@ def page_upload_history(): return render_app_page("history")
 @login_required
 def page_settings(): return render_app_page("settings")
 
+
+# ── V8 Enterprise hardening helpers ───────────────────────────────────────────
+def _env_filter(query, model, env):
+    env = str(env or "").strip().upper()
+    if env and env not in ("ALL", "ANY"):
+        return query.filter(model.environment.ilike(env))
+    return query
+
+def _log_event_to_row(e):
+    row = _json_loads_safe(getattr(e, "row_json", "{}"), {}) or {}
+    row.setdefault("time", e.event_time)
+    row.setdefault("env", e.environment)
+    row.setdefault("app", e.api_name)
+    row.setdefault("api", e.api_name)
+    row.setdefault("endpoint", e.endpoint)
+    row.setdefault("trace", e.trace_id)
+    row.setdefault("event", e.trace_id)
+    row.setdefault("level", e.level)
+    row.setdefault("latency", e.latency_ms)
+    row.setdefault("message", e.message)
+    return row
+
+def query_log_events_db(user_id, env="ALL", api_name="", endpoint="", level="", trace_id="", limit=1000):
+    limit = min(max(int(limit or 1000), 1), 10000)
+    q = LogEvent.query.filter_by(user_id=user_id)
+    q = _env_filter(q, LogEvent, env)
+    if api_name: q = q.filter(LogEvent.api_name.ilike(f"%{api_name}%"))
+    if endpoint: q = q.filter(LogEvent.endpoint.ilike(f"%{endpoint}%"))
+    if level: q = q.filter(LogEvent.level.ilike(str(level).upper()))
+    if trace_id: q = q.filter(LogEvent.trace_id.ilike(f"%{trace_id}%"))
+    return [_log_event_to_row(e) for e in q.order_by(LogEvent.created_at.desc(), LogEvent.id.desc()).limit(limit).all()]
+
+def trace_rows_db(user_id, trace_id, env="ALL", limit=1000):
+    trace_id = str(trace_id or "").strip()
+    if not trace_id: return [], None
+    tq = TraceIndex.query.filter_by(user_id=user_id, trace_id=trace_id)
+    tq = _env_filter(tq, TraceIndex, env)
+    record = tq.order_by(TraceIndex.created_at.desc()).first()
+    if record:
+        return (_json_loads_safe(record.rows_json, []) or [])[:limit], record
+    return query_log_events_db(user_id, env=env, trace_id=trace_id, limit=limit), None
+
+def _job_json(job):
+    return {"id": job.id, "status": job.status, "filename": job.filename, "bytes": job.total_bytes, "lines": job.total_lines, "error": job.error, "started_at": job.started_at.isoformat() if job.started_at else None, "finished_at": job.finished_at.isoformat() if job.finished_at else None}
+
+def maybe_create_incident_from_rows(user_id, rows, env="PROD", session_id=None):
+    if not rows: return None
+    score = _score_endpoint(rows)
+    if score.get("errors", 0) <= 0 and score.get("p95_latency_ms", 0) < 3000: return None
+    rca = _build_rca(rows, user_id=user_id)
+    severity = "Critical" if score.get("error_rate", 0) >= 5 or score.get("p95_latency_ms", 0) >= 5000 else "High" if score.get("errors", 0) else "Medium"
+    title = "Auto incident: " + (rca.get("summary") or "Reliability signal detected")[:180]
+    impacted = sorted({str(r.get("app") or r.get("api") or r.get("api_name") or "unknown") for r in rows if r.get("app") or r.get("api") or r.get("api_name")})[:8]
+    existing = Incident.query.filter_by(user_id=user_id, status="Open").filter(Incident.title.ilike(title[:80] + "%")).first()
+    evidence = {"environment": env, "session_id": session_id, "score": score, "clusters": rca.get("clusters", [])[:3], "sample_traces": list({str(r.get("trace") or r.get("event") or "") for r in rows if r.get("trace") or r.get("event")})[:10]}
+    if existing:
+        existing.severity = severity; existing.impacted_apis = ", ".join(impacted); existing.evidence_json = json.dumps(evidence, default=str)[:8000]; existing.updated_at = datetime.datetime.utcnow(); return existing
+    row = Incident(user_id=user_id, title=title[:220], owner=rca.get("owner") or "Unassigned", status="Open", severity=severity, impacted_apis=", ".join(impacted), evidence_json=json.dumps(evidence, default=str)[:8000])
+    db.session.add(row); return row
+
+def queue_ingestion_payload(user, raw, query, env, filename, source="file"):
+    job = IngestionJob(user_id=user.id, source=source, filename=filename, status="queued", total_bytes=len(str(raw).encode("utf-8", errors="ignore")))
+    db.session.add(job); db.session.commit()
+    threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, filename), daemon=True).start()
+    try:
+        audit_event(user, "ingestion.queued", filename, {"job_id": job.id, "environment": env, "bytes": job.total_bytes}); db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return job
+
 # ── Log analysis ──────────────────────────────────────────────────────────────
 @app.route("/analyse", methods=["POST"])
 @login_required
@@ -2562,8 +2640,17 @@ def analyse():
         if not raw:
             return jsonify({"error": "No log content provided"}), 400
 
-        start_ms = time.time()
         user = get_current_user()
+        if user is None:
+            return jsonify({"error": "Session expired. Please login again."}), 401
+
+        async_threshold = int(os.environ.get("OBSERVEX_ASYNC_UPLOAD_BYTES", str(1 * 1024 * 1024)))
+        force_async = str(request.form.get("async", "")).lower() in ("1", "true", "yes")
+        if force_async or len(raw.encode("utf-8", errors="ignore")) >= async_threshold or len(fnames) > 1:
+            job = queue_ingestion_payload(user, raw, query, env, fname)
+            return jsonify({"queued": True, "job_id": job.id, "status": job.status, "filename": fname, "message": "Upload accepted. Parsing and indexing are running in the background.", "poll_url": f"/ingestion-jobs/{job.id}"}), 202
+
+        start_ms = time.time()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
         result = analyse_log_text(raw, query, env, fname, user.id)
@@ -2597,6 +2684,7 @@ def analyse():
                 db.session.add(fm)
             db.session.flush()
             persist_observability_indexes(user.id, ls.id, rows_to_store, raw, env, fname, flow_maps)
+            maybe_create_incident_from_rows(user.id, rows_to_store, env, ls.id)
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -2645,6 +2733,7 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
             for fm in flow_maps:
                 db.session.add(fm)
             persist_observability_indexes(user_id, ls.id, rows_to_store, raw, env, filename, flow_maps)
+            maybe_create_incident_from_rows(user_id, rows_to_store, env, ls.id)
             persist_raw_upload(user_id, ls.id, filename, raw)
             job.status = "success"; job.total_lines = result.get("total", 0); job.finished_at = datetime.datetime.utcnow()
             db.session.commit()
@@ -2671,17 +2760,15 @@ def analyse_async():
             raw = f.read().decode("utf-8", errors="replace")
     if not raw:
         return jsonify({"error":"No log content provided"}), 400
-    job = IngestionJob(user_id=user.id, source="file", filename=fname, status="queued", total_bytes=len(raw.encode("utf-8", errors="ignore")))
-    db.session.add(job); db.session.commit()
-    threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, fname), daemon=True).start()
-    return jsonify({"job_id": job.id, "status":"queued"}), 202
+    job = queue_ingestion_payload(user, raw, query, env, fname)
+    return jsonify({"queued": True, "job_id": job.id, "status": job.status, "filename": fname, "poll_url": f"/ingestion-jobs/{job.id}"}), 202
 
 @app.route("/ingestion-jobs/<int:job_id>")
 @login_required
 def ingestion_job_status(job_id):
     user = get_current_user()
     job = IngestionJob.query.filter_by(id=job_id, user_id=user.id).first_or_404()
-    return jsonify({"id":job.id,"status":job.status,"filename":job.filename,"bytes":job.total_bytes,"lines":job.total_lines,"error":job.error,"started_at":job.started_at.isoformat() if job.started_at else None,"finished_at":job.finished_at.isoformat() if job.finished_at else None})
+    return jsonify(_job_json(job))
 
 # ── API ingestion (Bearer auth) ───────────────────────────────────────────────
 @app.route("/api/v1/logs/ingest", methods=["POST"])
@@ -3520,6 +3607,15 @@ def api_trace_lookup(trace_id):
     db.session.commit()
     return jsonify({"trace_id": trace_id, "environment": record.environment if record else env, "api_name": record.api_name if record else "", "endpoint": record.endpoint if record else "", "status": record.status if record else ("found" if rows else "not_found"), "latency_ms": record.latency_ms if record else 0, "rows": rows})
 
+
+@app.route("/api/v1/trace-ui/<trace_id>", methods=["GET"])
+@login_required
+def api_trace_lookup_ui(trace_id):
+    user = get_current_user()
+    env = request.args.get("environment", request.args.get("env", ""))
+    rows, record = trace_rows_db(user.id, trace_id, env or "ALL", min(int(request.args.get("limit", 1000) or 1000), 2000))
+    return jsonify({"trace_id": trace_id, "environment": record.environment if record else env, "api_name": record.api_name if record else "", "endpoint": record.endpoint if record else "", "status": record.status if record else ("found" if rows else "not_found"), "latency_ms": record.latency_ms if record else 0, "rows": rows, "db_first": True})
+
 @app.route("/api/v1/logs/nl-search", methods=["GET"])
 def api_natural_language_search():
     auth = request.headers.get("Authorization", "")
@@ -3945,25 +4041,14 @@ def billing_usage():
 
 
 # ── V30 Enterprise foundations: RCA, trace compare, live anomalies, SLA, search, reports ──
-def _latest_rows_for_user(user_id, limit=5000):
-    rows = []
-    events = LogEvent.query.filter_by(user_id=user_id).order_by(LogEvent.created_at.desc()).limit(limit).all()
-    for e in events:
-        row = _json_loads_safe(e.row_json, {}) or {}
-        row.setdefault("time", e.event_time)
-        row.setdefault("env", e.environment)
-        row.setdefault("app", e.api_name)
-        row.setdefault("api", e.api_name)
-        row.setdefault("endpoint", e.endpoint)
-        row.setdefault("trace", e.trace_id)
-        row.setdefault("level", e.level)
-        row.setdefault("latency", e.latency_ms)
-        row.setdefault("message", e.message)
-        rows.append(row)
+def _latest_rows_for_user(user_id, limit=5000, env="ALL", api_name="", endpoint=""):
+    rows = query_log_events_db(user_id, env=env, api_name=api_name, endpoint=endpoint, limit=limit)
     if rows:
         return rows
     sessions = LogSession.query.filter_by(user_id=user_id).order_by(LogSession.created_at.desc()).limit(5).all()
     for sess in sessions:
+        if env and env not in ("ALL", "ANY") and str(sess.environment or "").upper() != str(env).upper():
+            continue
         rows.extend(_json_loads_safe(sess.log_rows_json, []) or [])
         if len(rows) >= limit:
             break
@@ -3987,7 +4072,7 @@ def _score_endpoint(rows):
             "status": "Healthy" if score >= 90 else "Watch" if score >= 70 else "Breach risk",
             "why": [f"{err_rate}% error rate", f"P95 {p95}ms", f"{warns} warning signals"]}
 
-def _build_rca(rows, api_name='', endpoint=''):
+def _build_rca(rows, api_name='', endpoint='', user_id=None):
     scoped = [r for r in rows if (not api_name or api_name.lower() in str(r.get('app') or r.get('api') or r.get('api_name') or '').lower()) and (not endpoint or endpoint in str(r.get('endpoint') or r.get('flow') or r.get('message') or ''))]
     if not scoped: scoped = rows
     err_rows = [r for r in scoped if str(r.get('level','')).upper() in ('ERROR','FAILURE','FATAL') or re.search(r'exception|timeout|failed|failure|refused|unavailable', str(r.get('message','')), re.I)]
@@ -4003,7 +4088,10 @@ def _build_rca(rows, api_name='', endpoint=''):
     top = sorted(clusters.items(), key=lambda kv: kv[1]['count'], reverse=True)[:5]
     owner = 'Unassigned'
     if api_name:
-        reg = ApiRegistry.query.filter(ApiRegistry.api_name.ilike(f"%{api_name}%")).first()
+        reg_q = ApiRegistry.query
+        if user_id:
+            reg_q = reg_q.filter_by(user_id=user_id)
+        reg = reg_q.filter(ApiRegistry.api_name.ilike(f"%{api_name}%")).first()
         if reg and reg.owner: owner = reg.owner
     cause = "No failure pattern detected yet. Upload richer logs with trace IDs and endpoint names." if not top else f"Most likely cause: {top[0][0]} cluster affecting {', '.join(list(top[0][1]['apps'])[:3])}."
     return {"summary": cause, "confidence": min(95, 25 + len(err_rows)*3 + len(top)*10), "owner": owner,
@@ -4014,7 +4102,7 @@ def _build_rca(rows, api_name='', endpoint=''):
 @login_required
 def enterprise_global_search():
     user = get_current_user(); q = request.args.get('q','').strip(); env = request.args.get('env','').strip().upper(); limit = min(int(request.args.get('limit', 25)), 100)
-    rows = search_indexed_log_events(user.id, q, env or 'ALL', limit) if q else _latest_rows_for_user(user.id, limit)
+    rows = search_indexed_log_events(user.id, q, env or 'ALL', limit) if q else _latest_rows_for_user(user.id, limit, env or 'ALL')
     registry = []
     if q:
         regs = ApiRegistry.query.filter_by(user_id=user.id).filter(db.or_(ApiRegistry.api_name.ilike(f'%{q}%'), ApiRegistry.owner.ilike(f'%{q}%'), ApiRegistry.base_url.ilike(f'%{q}%'))).limit(10).all()
@@ -4024,8 +4112,8 @@ def enterprise_global_search():
 @app.route('/api/v1/enterprise/live-alerts')
 @login_required
 def enterprise_live_alerts():
-    user = get_current_user(); rows = _latest_rows_for_user(user.id, 1000)
-    score = _score_endpoint(rows); rca = _build_rca(rows)
+    user = get_current_user(); env=request.args.get('env','').strip().upper(); rows = _latest_rows_for_user(user.id, 1000, env or 'ALL')
+    score = _score_endpoint(rows); rca = _build_rca(rows, user_id=user.id)
     alerts=[]
     if score['errors']: alerts.append({"level":"critical" if score['error_rate']>5 else "warn", "title":"Error spike detected", "message":f"{score['errors']} errors across latest {score['total']} events", "owner":rca.get('owner','Unassigned')})
     if score['p95_latency_ms']>3000: alerts.append({"level":"warn", "title":"Latency anomaly", "message":f"P95 latency is {score['p95_latency_ms']}ms", "owner":rca.get('owner','Unassigned')})
@@ -4035,20 +4123,20 @@ def enterprise_live_alerts():
 @app.route('/api/v1/enterprise/rca')
 @login_required
 def enterprise_rca():
-    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000)
-    return jsonify(_build_rca(rows, request.args.get('api_name',''), request.args.get('endpoint','')))
+    user=get_current_user(); env=request.args.get('env','').strip().upper(); rows=_latest_rows_for_user(user.id, 5000, env or 'ALL', request.args.get('api_name',''), request.args.get('endpoint',''))
+    return jsonify(_build_rca(rows, request.args.get('api_name',''), request.args.get('endpoint',''), user.id))
 
 @app.route('/api/v1/enterprise/sla')
 @login_required
 def enterprise_sla():
-    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); api=request.args.get('api_name',''); ep=request.args.get('endpoint','')
+    user=get_current_user(); env=request.args.get('env','').strip().upper(); api=request.args.get('api_name',''); ep=request.args.get('endpoint',''); rows=_latest_rows_for_user(user.id, 5000, env or 'ALL', api, ep)
     scoped=[r for r in rows if (not api or api.lower() in str(r.get('app') or r.get('api') or '').lower()) and (not ep or ep in str(r.get('endpoint') or r.get('flow') or r.get('message') or ''))]
     return jsonify(_score_endpoint(scoped or rows))
 
 @app.route('/api/v1/enterprise/trace-compare')
 @login_required
 def enterprise_trace_compare():
-    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); a=request.args.get('a','').strip(); b=request.args.get('b','').strip(); api=request.args.get('api_name',''); ep=request.args.get('endpoint','')
+    user=get_current_user(); env=request.args.get('env','').strip().upper(); a=request.args.get('a','').strip(); b=request.args.get('b','').strip(); api=request.args.get('api_name',''); ep=request.args.get('endpoint',''); rows=_latest_rows_for_user(user.id, 5000, env or 'ALL', api, ep)
     def trace_rows(tid): return [r for r in rows if tid and tid in str(r.get('trace') or r.get('event') or r.get('message') or '')]
     traces={}
     for r in rows:
@@ -4072,14 +4160,162 @@ def enterprise_trace_compare():
             first_diff=f"First divergence at step {i+1}: failed={x.get('level')} {x.get('app')} vs success={y.get('level')} {y.get('app')}"; break
     return jsonify({"failed_trace":a,"success_trace":b,"first_difference":first_diff,"failed_steps":steps(ar),"success_steps":steps(br)})
 
+
+@app.route('/retention/apply', methods=['POST'])
+@login_required
+def retention_apply_now():
+    user = get_current_user()
+    deleted = apply_retention_for_user(user)
+    return jsonify({'status':'applied','deleted_sessions':deleted})
+
+@app.route('/api/v1/enterprise/alerts/evaluate', methods=['POST'])
+@login_required
+def enterprise_alerts_evaluate():
+    user = get_current_user()
+    data = request.get_json(force=True, silent=True) or {}
+    env = str(data.get('env') or data.get('environment') or request.args.get('env') or 'ALL').upper()
+    rows = _latest_rows_for_user(user.id, min(int(data.get('limit') or 5000), 10000), env)
+    incident = maybe_create_incident_from_rows(user.id, rows, env, None)
+    sent = []
+    if incident:
+        db.session.flush()
+        sent = _send_alert_notifications(user.id, {'title': incident.title, 'severity': incident.severity, 'environment': env, 'incident_id': incident.id, 'message': incident.notes or incident.impacted_apis})
+    db.session.commit()
+    return jsonify({'evaluated': len(rows), 'incident_created': bool(incident), 'incident_id': incident.id if incident else None, 'notifications': sent, 'health': _score_endpoint(rows)})
+
 @app.route('/api/v1/enterprise/report')
 @login_required
 def enterprise_report():
-    user=get_current_user(); rows=_latest_rows_for_user(user.id, 5000); sla=_score_endpoint(rows); rca=_build_rca(rows)
+    user=get_current_user(); env=request.args.get('env','').strip().upper(); rows=_latest_rows_for_user(user.id, 5000, env or 'ALL'); sla=_score_endpoint(rows); rca=_build_rca(rows, user_id=user.id)
     lines=["ObserveX Executive Reliability Report", f"Generated: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", "", f"Health score: {sla['score']}/100 ({sla['status']})", f"Events analysed: {sla['total']}", f"Errors: {sla['errors']} · Warnings: {sla['warnings']} · Error rate: {sla['error_rate']}%", f"Average latency: {sla['avg_latency_ms']}ms · P95 latency: {sla['p95_latency_ms']}ms", "", "RCA Summary:", rca['summary'], f"Suggested owner: {rca.get('owner','Unassigned')}", "", "Recommended actions:"] + [f"- {x}" for x in rca.get('next_steps', [])]
     return Response("\n".join(lines), mimetype='text/plain', headers={"Content-Disposition":"attachment; filename=observex-executive-report.txt"})
 
 
+
+# ── V9 Enterprise API/Security/Incident enhancements ───────────────────────
+
+def _safe_json_dict(txt, default=None):
+    try:
+        val = json.loads(txt or '{}')
+        return val if isinstance(val, dict) else (default or {})
+    except Exception:
+        return default or {}
+
+def _send_alert_notifications(user_id, payload):
+    """Best-effort alert notification fan-out for email/slack/teams/webhook destinations.
+    Slack and Teams support incoming webhook URLs. Generic webhook receives JSON.
+    Email uses configured Flask-Mail SMTP when available.
+    """
+    sent = []
+    destinations = AlertDestination.query.filter_by(user_id=user_id, active=True).all()
+    for d in destinations:
+        kind = (d.kind or 'webhook').lower()
+        target = d.target or ''
+        try:
+            if kind == 'email' and app.config.get('MAIL_USERNAME'):
+                msg = Message(subject=payload.get('title', 'ObserveX Alert'), recipients=[target], body=json.dumps(payload, indent=2, default=str))
+                mail.send(msg)
+                sent.append({'id': d.id, 'kind': kind, 'status': 'sent'})
+            elif kind in {'slack', 'teams', 'webhook'} and target.startswith(('http://', 'https://')):
+                import urllib.request
+                body = json.dumps(payload, default=str).encode('utf-8')
+                req = urllib.request.Request(target, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    sent.append({'id': d.id, 'kind': kind, 'status': 'sent', 'code': getattr(resp, 'status', 200)})
+            else:
+                sent.append({'id': d.id, 'kind': kind, 'status': 'skipped', 'reason': 'unsupported target or SMTP not configured'})
+        except Exception as exc:
+            app.logger.exception('Alert notification failed')
+            sent.append({'id': d.id, 'kind': kind, 'status': 'failed', 'error': str(exc)[:300]})
+    return sent
+
+@app.route('/api/v1/alerts/test', methods=['POST'])
+@login_required
+def api_alerts_test():
+    user = get_current_user()
+    payload = request.get_json(force=True, silent=True) or {}
+    payload.setdefault('title', 'ObserveX test alert')
+    payload.setdefault('severity', 'Info')
+    payload.setdefault('environment', payload.get('env') or 'TEST')
+    payload.setdefault('message', 'This is a test notification from ObserveX V9.')
+    sent = _send_alert_notifications(user.id, payload)
+    audit_event(user, 'alert.test', payload.get('title'), {'destinations': sent})
+    db.session.commit()
+    return jsonify({'ok': True, 'destinations': sent})
+
+@app.route('/api/v1/incidents/<int:incident_id>', methods=['GET', 'PATCH'])
+@login_required
+def api_incident_detail(incident_id):
+    user = get_current_user()
+    row = Incident.query.filter_by(user_id=user.id, id=incident_id).first_or_404()
+    if request.method == 'PATCH':
+        if get_user_role(user) not in {'Admin', 'Developer'}:
+            return jsonify({'error': 'Only Admin/Developer can update incidents'}), 403
+        data = request.get_json(force=True, silent=True) or {}
+        if 'status' in data: row.status = str(data.get('status') or row.status)[:40]
+        if 'owner' in data: row.owner = str(data.get('owner') or row.owner)[:120]
+        if 'notes' in data: row.notes = str(data.get('notes') or row.notes)[:4000]
+        row.updated_at = datetime.datetime.utcnow()
+        audit_event(user, 'incident.patch', row.title, {'status': row.status, 'owner': row.owner})
+        db.session.commit()
+    evidence = _safe_json_dict(row.evidence_json, {})
+    trace_ids = evidence.get('sample_traces') or []
+    related_logs = []
+    for tid in trace_ids[:5]:
+        rows, _record = trace_rows_db(user.id, tid, evidence.get('environment') or 'ALL', 50)
+        related_logs.extend(rows[:10])
+    return jsonify({
+        'id': row.id, 'title': row.title, 'severity': row.severity, 'status': row.status,
+        'owner': row.owner, 'impacted_apis': row.impacted_apis, 'notes': row.notes,
+        'evidence': evidence, 'related_logs': related_logs[:50],
+        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'updated_at': row.updated_at.isoformat() if row.updated_at else None
+    })
+
+@app.route('/api/v1/logs/export', methods=['GET'])
+def api_logs_export():
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '): return jsonify({'error': 'Missing token'}), 401
+    user = lookup_user_by_api_key(auth.split(' ', 1)[1])
+    if not user: return jsonify({'error': 'Invalid API key'}), 401
+    if api_rate_limited('export:' + str(user.id), limit=20, window=60):
+        return jsonify({'error': 'Export rate limit exceeded'}), 429
+    q = request.args.get('q', '')
+    env = request.args.get('environment', request.args.get('env', 'PROD'))
+    limit = min(5000, int(request.args.get('limit', '1000') or 1000))
+    rows = search_indexed_log_events(user.id, q, env, limit)
+    audit_event(user, 'logs.export', q, {'rows': len(rows), 'environment': env})
+    db.session.commit()
+    return Response(json.dumps({'rows': rows}, default=str), mimetype='application/json', headers={'Content-Disposition': 'attachment; filename=observex-logs-export.json'})
+
+@app.route('/api/v1/openapi.json')
+def openapi_spec():
+    spec = {
+        'openapi': '3.0.3',
+        'info': {'title': 'ObserveX API', 'version': 'v9', 'description': 'Log ingestion, search, trace lookup, incident and alert APIs.'},
+        'components': {'securitySchemes': {'BearerAuth': {'type': 'http', 'scheme': 'bearer'}}},
+        'security': [{'BearerAuth': []}],
+        'paths': {
+            '/api/v1/logs/ingest': {'post': {'summary': 'Ingest raw or structured logs', 'responses': {'200': {'description': 'Ingested or queued'}}}},
+            '/api/v1/logs/ingest-async': {'post': {'summary': 'Queue API log ingestion job', 'responses': {'200': {'description': 'Queued'}}}},
+            '/api/v1/logs/search': {'get': {'summary': 'Search indexed logs by q/env/limit', 'responses': {'200': {'description': 'Search results'}}}},
+            '/api/v1/logs/export': {'get': {'summary': 'Export indexed log rows as JSON', 'responses': {'200': {'description': 'JSON export'}}}},
+            '/api/v1/trace/{trace_id}': {'get': {'summary': 'Lookup a trace from TraceIndex/LogEvent', 'parameters': [{'name': 'trace_id', 'in': 'path', 'required': True, 'schema': {'type': 'string'}}], 'responses': {'200': {'description': 'Trace details'}}}},
+            '/api/v1/incidents/{incident_id}': {'get': {'summary': 'Incident detail with evidence'}, 'patch': {'summary': 'Update incident owner/status/notes'}},
+            '/api/v1/alerts/test': {'post': {'summary': 'Send test alert to configured destinations', 'responses': {'200': {'description': 'Delivery result'}}}}
+        }
+    }
+    return jsonify(spec)
+
+@app.route('/api/swagger')
+def api_swagger_page():
+    return '''<!doctype html><html><head><title>ObserveX API Docs</title><style>body{font-family:system-ui;margin:30px;line-height:1.6}code,pre{background:#f4f4f6;padding:2px 6px;border-radius:6px}pre{padding:16px;overflow:auto}</style></head><body><h1>ObserveX API V9</h1><p>Use <code>Authorization: Bearer &lt;OBSERVEX_API_KEY&gt;</code>.</p><p>OpenAPI JSON: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a></p><h2>Important endpoints</h2><pre>POST /api/v1/logs/ingest
+POST /api/v1/logs/ingest-async
+GET  /api/v1/logs/search?q=level:ERROR env:PROD
+GET  /api/v1/trace/{trace_id}
+GET  /api/v1/logs/export
+GET/PATCH /api/v1/incidents/{incident_id}
+POST /api/v1/alerts/test</pre></body></html>'''
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
