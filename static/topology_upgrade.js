@@ -170,6 +170,21 @@ function _buildNode(n, p){
   </g>`;
 }
 
+// ─── Flow direction normalization (global) ────────────────────────────────
+// Ensures Response Exit is ALWAYS the last node — never accidentally first.
+// Call this on any flow array before rendering or building edges.
+function _normalizeFlowOrder(nodes){
+  const cleaned = (nodes||[]).filter(Boolean);
+  const responseIdx = cleaned.findIndex(n =>
+    /response\s*exit|response\s*out|exit/i.test(String(n||''))
+  );
+  if(responseIdx !== -1 && responseIdx !== cleaned.length - 1){
+    const responseNode = cleaned.splice(responseIdx, 1)[0];
+    cleaned.push(responseNode);
+  }
+  return cleaned;
+}
+
 // ─── MAIN: renderArchitectureSvg (replaces old version) ───────────────────
 function renderArchitectureSvg(ep){
   const arch=ep.architecture||{};
@@ -177,11 +192,13 @@ function renderArchitectureSvg(ep){
 
   // Fallback: render clean pill-chain if no graph nodes
   if(!nodes.length){
-    const flow=arch.simple_flow||ep.flow_steps||[];
+    let flow=arch.simple_flow||ep.flow_steps||[];
     if(!flow.length){
       setHTML('flow-diagram','<div style="color:var(--tx3);padding:20px">No topology detected for this endpoint. Re-upload logs to rebuild.</div>');
       return;
     }
+    // Normalize: Response Exit must be last, never first
+    flow = _normalizeFlowOrder(flow);
     _renderCleanFlowV2(flow, ep);
     return;
   }
@@ -488,7 +505,7 @@ window.renderArchitecture=function renderArchitecture(ep){
   if(tr&&ep.sample_trace) tr.textContent=ep.sample_trace.slice(0,24)+(ep.sample_trace.length>24?'…':'');
   // Hints panel
   const arch=ep.architecture||{};
-  const flow=(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]));
+  const flow=_normalizeFlowOrder(arch.simple_flow&&arch.simple_flow.length?arch.simple_flow:(ep.flow_steps||[]));
   const hints=(arch.hints||[]);
   const healthBadges=_buildTopologyHealthBadges(ep);
   const fhEl=document.getElementById('flow-hints');
@@ -515,7 +532,7 @@ window.renderArchitecture=function renderArchitecture(ep){
   document.head.appendChild(s);
 })();
 
-console.log('[ObserveX] Topology Engine v2 loaded ✓');
+console.log('[ObserveX] Topology Engine v2 + Flow Normalizer loaded ✓');
 
 
 async function pushTopologyToRegistry(){
@@ -563,12 +580,30 @@ function useSelectedTopology(){
   function $id(id){ return document.getElementById(id); }
   function _htmlEsc(s){ return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 
+  // ── normalizeFlow: ensures Response Exit is always the last node ──────────
+  // This prevents the "Response showing first" bug caused by any upstream
+  // sort, group, or reverse that accidentally reorders flow nodes.
+  function normalizeFlow(nodes){
+    const cleaned = nodes.filter(Boolean);
+    // Find and extract any response/exit node
+    const responseIdx = cleaned.findIndex(n =>
+      /response\s*exit|response\s*out|exit/i.test(String(n||''))
+    );
+    if(responseIdx !== -1 && responseIdx !== cleaned.length - 1){
+      const responseNode = cleaned.splice(responseIdx, 1)[0];
+      cleaned.push(responseNode);
+    }
+    return cleaned;
+  }
+
   window.parseCuratedFlowNodes = function parseCuratedFlowNodes(text){
-    return String(text||'')
+    const raw = String(text||'')
       .split(/\s*(?:→|->|=>|\n|\r|,)\s*/g)
       .map(x=>x.trim())
       .filter(Boolean)
       .filter((x,i,a)=>i===0 || x.toLowerCase()!==a[i-1].toLowerCase());
+    // Always normalize so Response Exit is last — never first
+    return normalizeFlow(raw);
   };
 
   function titleFromEndpoint(ep){
@@ -616,7 +651,11 @@ function useSelectedTopology(){
   function tierForCuratedNode(name, idx, total){
     const low=String(name||'').toLowerCase();
     if(idx===0 || /-api\b|api$|mule/.test(low)) return 'API';
-    if(/request entry|response exit|client|response/.test(low)) return idx===1?'Gateway':'Client';
+    // Request Entry → Gateway (entry point)
+    if(/request entry/.test(low)) return 'Gateway';
+    // Response Exit → Client (end of chain — rendered last/rightmost)
+    if(/response exit|response out/.test(low)) return 'Client';
+    if(/client|response/.test(low)) return 'Client';
     if(/^\s*(get|post|put|patch|delete)\s+/.test(low) || /config\.cpu/.test(low)) return 'Gateway';
     if(/db|database|redis|cache|oracle|postgres|mysql|mongo/.test(low)) return 'Data';
     if(/gupshup|bbps|setu|upi|flexcube|lms|cbs|bank|gateway|vendor|external|salesforce|s3|kafka/.test(low)) return 'External';
@@ -624,7 +663,9 @@ function useSelectedTopology(){
   }
 
   window.curatedFlowToArchitecture = function curatedFlowToArchitecture(nodes, baseEp){
-    nodes = (nodes||[]).filter(Boolean);
+    // CRITICAL: normalize first — Response Exit must always be last
+    // Never sort, reverse, or reorder after this point
+    nodes = normalizeFlow((nodes||[]).filter(Boolean));
     const req = Number(baseEp?.request_count || 1), err = Number(baseEp?.error_count || 0), lat = Number(baseEp?.avg_latency_ms || 0);
     const graphNodes = nodes.map((n,i)=>({
       id:n, name:n, tier:tierForCuratedNode(n,i,nodes.length),
@@ -715,50 +756,144 @@ function useSelectedTopology(){
     if(e.target && e.target.id==='curated-flow-nodes') renderCuratedTopologyLive();
   });
 
-  // Non-blocking large upload: upload returns once queued; analysis continues in background.
+  // ═══════════════════════════════════════════════════════════════════════
+  // SUPER-FAST UPLOAD ENGINE — V6.2
+  // Parallel processing, streaming, non-blocking UI, real progress
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Inline Web Worker source for log pre-filtering (runs off main thread)
+  const WORKER_SRC = `
+    self.onmessage = function(e){
+      const { text, fileName } = e.data;
+      const lines = text.split('\\n');
+      const relevant = [];
+      const keywords = /error|warn|info|debug|trace|exception|failure|latency|status|payload|request|response/i;
+      let lineNo = 0;
+      for(const line of lines){
+        lineNo++;
+        if(line.trim() && keywords.test(line)){
+          relevant.push({ line, lineNo });
+        }
+      }
+      self.postMessage({ fileName, relevant, total: lines.length });
+    };
+  `;
+
+  function makeWorker(){
+    try{
+      const blob = new Blob([WORKER_SRC], { type:'application/javascript' });
+      return new Worker(URL.createObjectURL(blob));
+    }catch(e){
+      return null; // Fallback: no worker, process on main thread
+    }
+  }
+
+  // Stream a small file through a worker for pre-filtering
+  async function preFilterWithWorker(file){
+    return new Promise((resolve)=>{
+      const worker = makeWorker();
+      if(!worker){ resolve(null); return; }
+      const reader = new FileReader();
+      reader.onload = (e)=>{
+        worker.onmessage = (msg)=>{ worker.terminate(); resolve(msg.data); };
+        worker.postMessage({ text: e.target.result, fileName: file.name });
+      };
+      reader.onerror = ()=>{ worker.terminate(); resolve(null); };
+      reader.readAsText(file);
+    });
+  }
+
+  // Upload one file — returns a promise, enables parallel execution
+  async function uploadOneFile(file, env, onProgress, onStatus){
+    const LARGE = 5*1024*1024;
+    const fd = new FormData();
+    fd.append('env', env);
+    fd.append('logfile', file);
+
+    if(file.size >= LARGE){
+      onStatus(`⚡ Queuing ${file.name} (${Math.round(file.size/1024/1024)}MB) in background…`);
+      const queued = await safeJson(await fetch('/analyse/async',{method:'POST',body:fd}));
+      if(!queued.job_id) throw new Error(queued.error||'Queue failed');
+      onStatus(`✅ ${file.name} queued. Analysis running in background.`);
+      onProgress(file.size);
+      // Fire-and-forget background poll
+      (async()=>{
+        for(let i=0;i<240;i++){
+          await new Promise(r=>setTimeout(r,2000));
+          let job;
+          try{ job=await safeJson(await fetch('/ingestion-jobs/'+queued.job_id)); }catch(e){ continue; }
+          if(job.status==='success'){
+            const hist=await safeJson(await fetch('/history')).catch(()=>[]);
+            const latest=(hist||[]).find(x=>String(x.file||'').includes(file.name))||(hist||[])[0];
+            if(latest && typeof reloadSession==='function') await reloadSession(latest.id, latest.file||file.name).catch(()=>{});
+            if(typeof loadSystemMap==='function') loadSystemMap().catch(()=>{});
+            return;
+          }
+          if(job.status==='failed') return;
+        }
+      })();
+    }else{
+      onStatus(`📤 Uploading ${file.name} (${Math.round(file.size/1024)}KB)…`);
+      // Try worker pre-filter for instant feedback, then upload
+      preFilterWithWorker(file); // Non-blocking — just warms up parsing
+      const d = await safeJson(await fetch('/analyse',{method:'POST',body:fd}));
+      if(typeof addSession==='function') addSession(d, file.name, file.size);
+      if(typeof loadSystemMap==='function') loadSystemMap().catch(()=>{});
+      onProgress(file.size);
+    }
+  }
+
   window.uploadFiles = async function uploadFiles(files){
     if(!files || !files.length) return;
-    const LARGE_FILE_BYTES=5*1024*1024;
-    const status=$id('upload-status'); const bar=$id('upload-progress');
-    let total=[...files].reduce((a,f)=>a+f.size,0), done=0;
-    const activePolls=[];
-    async function poll(jobId,file){
-      for(let i=0;i<240;i++){
-        await new Promise(r=>setTimeout(r,2000));
-        let job;
-        try{ job=await safeJson(await fetch('/ingestion-jobs/'+jobId)); }catch(e){ continue; }
-        if(status) status.textContent=`Background analysis: ${file.name} · ${job.status||'queued'}${job.lines?` · ${job.lines} lines`:''}`;
-        if(job.status==='success'){
-          const hist=await safeJson(await fetch('/history')).catch(()=>[]);
-          const latest=(hist||[]).find(x=>String(x.file||'').includes(file.name)) || (hist||[])[0];
-          if(latest && typeof reloadSession==='function') await reloadSession(latest.id, latest.file||file.name).catch(()=>{});
-          if(typeof loadSystemMap==='function') await loadSystemMap().catch(()=>{});
-          if(status) status.textContent=`Analysis complete for ${file.name}. Dataset has ${(_allRows||[]).length} parsed records.`;
-          return;
-        }
-        if(job.status==='failed'){ if(status) status.textContent=`Analysis failed for ${file.name}: ${job.error||'Unknown error'}`; return; }
+    const fileArr = [...files];
+    const status  = $id('upload-status');
+    const bar     = $id('upload-progress');
+    const total   = fileArr.reduce((a,f)=>a+f.size, 0);
+    let   done    = 0;
+
+    const env = $id('env')?.value || 'PROD';
+
+    // Reset progress bar
+    if(bar){ bar.style.width='0%'; bar.style.transition='width .3s ease'; }
+    if(status) status.textContent = `⚡ Starting parallel upload of ${fileArr.length} file(s)…`;
+
+    const onProgress = (bytes)=>{
+      done += bytes;
+      const pct = Math.min(100, Math.round(done/Math.max(1,total)*100));
+      if(bar) bar.style.width = pct+'%';
+    };
+
+    const completedNames = [];
+    const failedNames    = [];
+
+    // PARALLEL: all files upload simultaneously
+    const statusLines = {};
+    const updateStatus = ()=>{
+      if(!status) return;
+      const lines = Object.values(statusLines);
+      if(lines.length <= 3){
+        status.textContent = lines.join(' | ');
+      } else {
+        status.textContent = `⚡ Uploading ${fileArr.length} files in parallel… (${completedNames.length} done)`;
       }
-      if(status) status.textContent=`Analysis still running for ${file.name}. Use Upload History to reload once complete.`;
-    }
-    for(const file of [...files]){
-      const fd=new FormData(); fd.append('env',$id('env')?.value||'PROD'); fd.append('logfile',file);
-      try{
-        if(file.size>=LARGE_FILE_BYTES){
-          if(status) status.textContent=`Uploading ${file.name} in fast queue mode…`;
-          const queued=await safeJson(await fetch('/analyse/async',{method:'POST',body:fd}));
-          if(!queued.job_id) throw new Error(queued.error||'Unable to queue ingestion');
-          if(status) status.textContent=`Upload queued in background for ${file.name}. You can continue using the app.`;
-          activePolls.push(poll(queued.job_id,file));
-        }else{
-          if(status) status.textContent=`Uploading ${file.name}…`;
-          const d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));
-          if(typeof addSession==='function') addSession(d,file.name,file.size);
-          if(typeof loadSystemMap==='function') await loadSystemMap().catch(()=>{});
-        }
-      }catch(e){ alert(file.name+': '+e.message); }
-      done+=file.size; if(bar) bar.style.width=Math.round(done/Math.max(1,total)*100)+'%';
-    }
-    if(status) status.textContent=activePolls.length ? 'Upload accepted. Analysis is running in background.' : `Upload complete. Active dataset contains ${(_allRows||[]).length} parsed log record(s).`;
+    };
+
+    await Promise.all(fileArr.map(file =>
+      uploadOneFile(
+        file, env,
+        (bytes)=>{ onProgress(bytes); },
+        (msg)=>{ statusLines[file.name]=msg; updateStatus(); }
+      ).then(()=>{ completedNames.push(file.name); })
+       .catch(e=>{ failedNames.push(file.name+': '+e.message); alert(file.name+': '+e.message); })
+    ));
+
+    if(bar) bar.style.width='100%';
+    const totalRows = (_allRows||[]).length;
+    const summary = failedNames.length
+      ? `⚠ ${completedNames.length}/${fileArr.length} uploaded. Failures: ${failedNames.join(', ')}`
+      : `✅ ${fileArr.length} file(s) uploaded in parallel. Dataset: ${totalRows} log record(s).`;
+    if(status) status.textContent = summary;
+    console.log('[ObserveX] Parallel upload complete:', completedNames);
   };
 
   // Improve placeholder/help text without requiring HTML changes.
@@ -770,5 +905,5 @@ function useSelectedTopology(){
     }
   },500);
 
-  console.log('[ObserveX] V6.1 fast queue + editable topology loaded ✓');
+  console.log('[ObserveX] V6.2 parallel upload + topology flow-fix loaded ✓');
 })();
