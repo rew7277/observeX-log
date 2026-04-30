@@ -1441,8 +1441,10 @@ def _sanitize_architecture_for_response(api_name: str, arch: dict, request_count
     flow = _build_clean_execution_flow(api_name, [], arch)
     if len(flow) >= 2:
         arch['simple_flow'] = flow
-        arch['nodes'] = [{'id': x, 'name': x, 'tier': _service_tier(x), 'count': request_count if i == 0 else 1, 'errors': error_count if i == len(flow)-2 else 0, 'warns': 0, 'avg_latency_ms': avg_latency if i == len(flow)-2 else 0, 'health': 'critical' if error_count and i == len(flow)-2 else 'ok'} for i, x in enumerate(flow)]
-        arch['edges'] = [{'from': a, 'to': b, 'count': request_count or 1, 'errors': error_count if b == flow[-2] else 0, 'avg_latency_ms': avg_latency if b == flow[-2] else 0, 'error_rate': round(error_count / max(1, request_count or 1) * 100, 1) if b == flow[-2] else 0, 'label': 'calls'} for a, b in zip(flow, flow[1:])]
+        total_steps = len(flow)
+        # V11: Use position-aware tier classifier so BBPS/Setu/LMS/etc. land in External lane
+        arch['nodes'] = [{'id': x, 'name': x, 'tier': _tier_for_flow_step(x, i, total_steps), 'count': request_count if i in (0,1) else max(1,request_count-i), 'errors': error_count if i == total_steps-2 else 0, 'warns': 0, 'avg_latency_ms': avg_latency if 0 < i < total_steps-1 else 0, 'health': 'critical' if error_count and i == total_steps-2 else 'ok'} for i, x in enumerate(flow)]
+        arch['edges'] = [{'from': a, 'to': b, 'count': request_count or 1, 'errors': error_count if b == flow[-2] else 0, 'avg_latency_ms': avg_latency if a != flow[0] else 0, 'error_rate': round(error_count / max(1, request_count or 1) * 100, 1) if b == flow[-2] else 0, 'label': 'calls'} for a, b in zip(flow, flow[1:])]
         if not arch.get('traces') or arch.get('traces') == []:
             traces, matrix = _synthetic_trace_and_matrix(flow, request_count, error_count, avg_latency)
             arch['traces'] = traces
@@ -1455,6 +1457,50 @@ def _sanitize_architecture_for_response(api_name: str, arch: dict, request_count
     if 'Cleaned topology: processor event IDs and generic tags are hidden.' not in arch['hints']:
         arch['hints'].append('Cleaned topology: processor event IDs and generic tags are hidden.')
     return arch
+def _tier_for_flow_step(name: str, idx: int, total: int) -> str:
+    """Classify a topology flow step into the correct architecture tier.
+    More precise than _service_tier — understands position and downstream semantics."""
+    low = (name or '').lower()
+    if low in ('response', 'response exit', 'client', 'caller'):
+        return 'Client'
+    # HTTP method/endpoint labels always go in Gateway lane
+    if re.match(r'^(get|post|put|delete|patch|head|options)\s', low):
+        return 'Gateway'
+    # Known external downstream systems — must come before generic 'service' check
+    _EXTERNAL_SIGNALS = (
+        'bbps', 'setu', 'upi', 'upi gateway', 'salesforce', 'sfdc',
+        'gupshup', 'lms', 'lms core', 'lms / flexcube', 'flexcube', 'fcubs', 'core banking',
+        'kotak', 'nach', 'emandate', 'html/pdf', 'html to pdf', 'pdf engine',
+        'twilio', 'sms gateway', 'sendgrid', 'email service',
+        'aws s3', 's3', 'kafka', 'message broker', 'event bus',
+        'payment engine', 'payment processing', 'payment',
+        'crif', 'cibil', 'bureau', 'credit score',
+        'external system', 'third party', 'vendor',
+    )
+    if any(x in low for x in _EXTERNAL_SIGNALS):
+        return 'External'
+    # Data stores
+    if any(x in low for x in ('oracle', 'postgres', 'mysql', 'mongo', 'redis', 'db', 'database',
+                               'cache', 'mssql', 'jdbc', 'dynamo', 'elastic', 'elasticsearch')):
+        return 'Data'
+    # MuleSoft gateway / proxy
+    if any(x in low for x in ('gateway', 'proxy', 'apigee', 'nginx', 'lb', 'loadbalancer', 'kong')):
+        return 'Gateway'
+    # First node in flow = the primary API
+    if idx == 0:
+        return 'API'
+    # Internal processors / sub-flows = Service
+    if any(x in low for x in ('subflow', 'impl', 'processor', 'handler', 'worker',
+                               'validator', 'transformer', 'token', 'auth',
+                               'request entry', 'response exit', 'security logging',
+                               'downstream call')):
+        return 'Service'
+    # MuleSoft API names
+    if re.search(r'\bs-[a-z]', low) or any(x in low for x in ('api', 'mule', 'process-api', '-api-')):
+        return 'API'
+    return 'Service'
+
+
 def _service_tier(name: str) -> str:
     """Classify a service name into an architecture tier."""
     low = (name or '').lower()
@@ -1799,8 +1845,35 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
             # Build clean semantic topology from Mule processor sequence, not from generic tag/tier sorting.
             flow_steps = _build_clean_execution_flow(api_name, ep_rows, arch)
             arch['simple_flow'] = flow_steps
-            arch['nodes'] = [{'id': x, 'name': x, 'tier': _service_tier(x), 'count': req_count if i == 0 else 1, 'errors': err_count if i == len(flow_steps)-2 else 0, 'warns': 0, 'avg_latency_ms': avg_lat if i == len(flow_steps)-2 else 0, 'health': 'critical' if err_count and i == len(flow_steps)-2 else 'ok'} for i, x in enumerate(flow_steps)]
-            arch['edges'] = [{'from': a, 'to': b, 'count': req_count or 1, 'errors': err_count if b == flow_steps[-2] else 0, 'avg_latency_ms': avg_lat if b == flow_steps[-2] else 0, 'error_rate': round(err_count / max(1, req_count) * 100, 1) if b == flow_steps[-2] else 0, 'label': 'calls'} for a, b in zip(flow_steps, flow_steps[1:])]
+            # V11: Only rebuild nodes/edges if the topology engine didn't already produce
+            # a richer graph. This preserves the v3 engine's detailed downstream detection
+            # (BBPS, Setu, UPI, LMS, Flexcube, etc.) instead of clobbering it with a flat chain.
+            existing_nodes = arch.get('nodes') or []
+            if len(existing_nodes) < len(flow_steps):
+                total_steps = len(flow_steps)
+                arch['nodes'] = [
+                    {
+                        'id': x, 'name': x,
+                        'tier': _tier_for_flow_step(x, i, total_steps),
+                        'count': req_count if i in (0, 1) else max(1, req_count - i),
+                        'errors': err_count if i == total_steps - 2 else 0,
+                        'warns': 0,
+                        'avg_latency_ms': avg_lat if 0 < i < total_steps - 1 else 0,
+                        'health': 'critical' if err_count and i == total_steps - 2 else 'ok',
+                    }
+                    for i, x in enumerate(flow_steps)
+                ]
+                arch['edges'] = [
+                    {
+                        'from': a, 'to': b,
+                        'count': req_count or 1,
+                        'errors': err_count if b == flow_steps[-2] else 0,
+                        'avg_latency_ms': avg_lat if a != flow_steps[0] else 0,
+                        'error_rate': round(err_count / max(1, req_count) * 100, 1) if b == flow_steps[-2] else 0,
+                        'label': 'calls',
+                    }
+                    for a, b in zip(flow_steps, flow_steps[1:])
+                ]
             if not arch.get('traces'):
                 traces, matrix = _synthetic_trace_and_matrix(flow_steps, req_count, err_count, avg_lat)
                 arch['traces'] = traces
@@ -2345,17 +2418,17 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
     matrix=[{'from':e['from'],'to':e['to'],'calls':e['count'],'errors':e['errors'],'avg_latency_ms':e['avg_latency_ms'],'error_rate':e['error_rate']} for e in edges]
     tiers=sorted(set(n['tier'] for n in nodes), key=lambda t: {'Client':0,'Gateway':1,'API':2,'Service':3,'External':4,'Data':5}.get(t,9))
     return {'nodes':nodes,'edges':edges,'traces':traces,'matrix':matrix,'tiers':tiers,'simple_flow':flow,'endpoint':ep or endpoint or '/','method':method,'hints':['V40: topology is built from event-grouped Mule ENTRY/CALL/processor/EXIT semantics.','Upload response is lighter; large raw files are saved asynchronously to keep 10MB uploads fast.','Registry delete is available and processor/event pseudo APIs are filtered.']}
-# ── V42 Topology Engine v4 integration ───────────────────────────────────────
+# ── V41 Topology Engine v2 integration ───────────────────────────────────────
 # Overrides the older V40 topology functions with the uploaded v2 engine.
 # Existing call sites continue using extract_architecture_graph(...) normally.
 try:
-    from topology_engine_v4 import (
+    from topology_engine_v3 import (
         extract_architecture_graph,
         _build_clean_execution_flow,
         _extract_flow_steps_from_mule_rows,
     )
 except Exception as _topology_v2_error:
-    app.logger.exception("Topology Engine v4 import failed; falling back to bundled V40 engine")
+    app.logger.exception("Topology Engine v3 import failed; falling back to bundled V40 engine")
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")

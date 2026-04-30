@@ -395,23 +395,43 @@ def _node_health(errors: int, count: int, avg_lat: int) -> str:
 
 
 def _build_nodes_and_edges(flow: list, req_count: int, err_count: int, avg_lat: int):
+    _EXTERNAL_SIGNALS = (
+        'bbps', 'setu', 'upi', 'upi gateway', 'salesforce', 'sfdc',
+        'gupshup', 'lms', 'lms core', 'lms / flexcube', 'flexcube', 'fcubs', 'core banking',
+        'kotak', 'nach', 'emandate', 'html/pdf', 'html to pdf', 'pdf engine',
+        'twilio', 'sms gateway', 'sendgrid', 'email service',
+        'aws s3', 's3', 'kafka', 'message broker', 'event bus',
+        'payment engine', 'payment processing',
+        'crif', 'cibil', 'bureau', 'credit score',
+        'external system', 'third party', 'vendor',
+    )
+    def _flow_tier(name: str, idx: int) -> str:
+        low = (name or '').lower()
+        if low in ('response', 'response exit', 'client', 'caller'):
+            return 'Client'
+        if re.match(r'^(get|post|put|delete|patch|head|options)\s', low):
+            return 'Gateway'
+        if any(x in low for x in _EXTERNAL_SIGNALS):
+            return 'External'
+        if any(x in low for x in ('db', 'database', 'redis', 'mongo', 'oracle', 'postgres', 'dynamo', 'elastic', 'elasticsearch', 'cache', 'mssql', 'jdbc')):
+            return 'Data'
+        if any(x in low for x in ('gateway', 'proxy', 'apigee', 'nginx', 'lb', 'loadbalancer', 'kong')):
+            return 'Gateway'
+        if idx == 0:
+            return 'API'
+        if any(x in low for x in ('subflow', 'impl', 'processor', 'handler', 'worker', 'validator', 'transformer', 'token', 'auth', 'request entry', 'response exit', 'security logging', 'downstream call')):
+            return 'Service'
+        if re.search(r'\bs-[a-z]', low) or any(x in low for x in ('api', 'mule', '-api-')):
+            return 'API'
+        return 'Service'
+
     nodes = []
     edges = []
+    total = len(flow)
     for i, name in enumerate(flow):
-        tier = _service_tier(name)
-        if i == 0:
-            tier = "API"
-        if re.match(r"^(get|post|put|delete|patch)\s", name, re.I):
-            tier = "Gateway"
-        if name.lower() in ("response", "client"):
-            tier = "Client"
-        if any(x in name.lower() for x in ["salesforce", "gupshup", "core", "nach", "external system", "html/pdf", "twilio", "sendgrid", "kafka", "s3"]):
-            tier = "External"
-        if any(x in name.lower() for x in ["db", "database", "redis", "mongo", "oracle", "postgres", "dynamo", "elastic"]):
-            tier = "Data"
-        # Distribute errors toward the penultimate node (most likely culprit)
-        error_here = err_count if (i == len(flow) - 2 and err_count) else 0
-        lat_here = avg_lat if (i > 0 and i < len(flow) - 1) else 0
+        tier = _flow_tier(name, i)
+        error_here = err_count if (i == total - 2 and err_count) else 0
+        lat_here = avg_lat if (0 < i < total - 1) else 0
         health = _node_health(error_here, req_count, lat_here)
         nodes.append({
             "id": name, "name": name, "tier": tier,
@@ -421,9 +441,9 @@ def _build_nodes_and_edges(flow: list, req_count: int, err_count: int, avg_lat: 
         })
     for a, b in zip(flow, flow[1:]):
         a_idx = flow.index(a)
-        is_penult = b == flow[-2] if len(flow) >= 2 else False
+        is_penult = (b == flow[-2]) if len(flow) >= 2 else False
         eerr = err_count if is_penult else 0
-        elat = avg_lat if (a_idx > 0) else 0
+        elat = avg_lat if a_idx > 0 else 0
         error_rate = round(eerr / max(1, req_count) * 100, 1)
         edges.append({
             "from": a, "to": b,

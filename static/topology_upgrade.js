@@ -30,7 +30,32 @@ function _trunc(s,n){ s=String(s||''); return s.length>n?s.slice(0,n-1)+'…':s;
 // ─── Node position calculator ─────────────────────────────────────────────
 function _layoutNodes(nodes){
   const ALL=['Client','Gateway','API','Service','External','Data'];
-  const activeTiers=ALL.filter(t=>nodes.some(n=>n.tier===t));
+  let activeTiers=ALL.filter(t=>nodes.some(n=>n.tier===t));
+
+  // V11: If all nodes collapsed into 1-2 tiers (common for linear MuleSoft flows),
+  // spread them manually so we get a horizontal diagram instead of a tall column.
+  if (activeTiers.length <= 2 && nodes.length >= 3) {
+    // Redistribute across virtual tiers by position in the flow array
+    const tierMap = ['API','Gateway','Service','External','Data','Client'];
+    nodes.forEach((n, i) => {
+      const lo = (n.name||'').toLowerCase();
+      if (lo === 'response' || lo === 'response exit' || lo === 'client') {
+        n.tier = 'Client';
+      } else if (/^(get|post|put|delete|patch)\s/.test(lo)) {
+        n.tier = 'Gateway';
+      } else if (/bbps|setu|upi|salesforce|gupshup|lms|flexcube|kotak|nach|payment|html\/pdf|twilio|sendgrid|kafka|s3|cibil|crif/.test(lo)) {
+        n.tier = 'External';
+      } else if (/db|database|redis|mongo|oracle|postgres|dynamo|elastic/.test(lo)) {
+        n.tier = 'Data';
+      } else if (i === 0) {
+        n.tier = 'API';
+      } else {
+        n.tier = tierMap[Math.min(i, tierMap.length - 1)];
+      }
+    });
+    activeTiers = ALL.filter(t=>nodes.some(n=>n.tier===t));
+  }
+
   const groups={};
   activeTiers.forEach(t=>{ groups[t]=nodes.filter(n=>n.tier===t); });
   const maxPer=Math.max(1,...activeTiers.map(t=>groups[t].length));
@@ -185,68 +210,25 @@ function _normalizeFlowOrder(nodes){
   return cleaned;
 }
 
-// ─── Client-side topology synthesis from active uploaded rows ───────────────
-function _topoLabelFromToken(s){
-  s = String(s || '').split('?')[0]
-    .replace(/^https?:\/\//i, '')
-    .replace(/\..*$/, '')
-    .replace(/\/.*$/, '');
-  s = s.replace(/[-_]+/g, ' ').replace(/\b(api|svc|service)\b/ig, '').trim();
-  return s.split(/\s+/).filter(Boolean).map(w => /^(kyc|cbs|lms|upi|bbps)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ').slice(0, 80);
-}
-function _topoRowSignals(rows, ep){
-  const text = (rows || []).slice(0, 1200).map(r => [r.message, r.flow, r.app, r.endpoint].filter(Boolean).join(' ')).join('\n');
-  const found = [];
-  const add = x => { if (x && !found.some(y => y.toLowerCase() === String(x).toLowerCase())) found.push(x); };
-  const checks = [
-    [/\bkyc\b|aadhaar|aadhar|pan.?verify|ckyc/i, 'KYC Provider'],
-    [/credit.?bureau|cibil|experian|equifax|crif/i, 'Credit Bureau'],
-    [/\bcbs\b|core.?banking|finacle|flexcube|fcubs/i, 'CBS / Core Banking'],
-    [/\blms\b|loan.?management|loan.?details/i, 'LMS'],
-    [/\bbbps\b|bill.?payment/i, 'BBPS'], [/\bsetu\b/i, 'Setu'], [/\bupi\b|vpa/i, 'UPI Gateway'],
-    [/salesforce|sfdc/i, 'Salesforce'], [/kafka|event.?bus|message.?broker/i, 'Message Broker'],
-    [/redis/i, 'Redis Cache'], [/oracle|mysql|postgres|mongodb|dynamodb/i, 'Database']
-  ];
-  checks.forEach(([re, label]) => { if (re.test(text)) add(label); });
-  const urlRe = /https?:\/\/([^\/\s"'?,;]+)|(?:target|service|downstream|dependency|host|baseUrl|url|uri)\s*[:=]\s*["']?([^\s"',;{}]+)/ig;
-  let m;
-  while ((m = urlRe.exec(text))) {
-    const label = _topoLabelFromToken(m[1] || m[2] || '');
-    if (label && !/^(Http|Https|Localhost|Request|Response|Api|Www)$/i.test(label)) add(label);
-  }
-  if (found.includes('Credit Bureau')) ['Credit Score', 'CRIF SMS'].forEach(x => { const i = found.indexOf(x); if (i >= 0) found.splice(i, 1); });
-  return found.slice(0, 8);
-}
-function _buildClientTopologyFromRows(ep, arch){
-  const rows = (window._allRows || []); if (!rows.length) return null;
-  const epText = String(ep?.endpoint || arch?.endpoint || '').toLowerCase().replace(/^\//, '');
-  let scoped = rows.filter(r => !epText || [r.endpoint, r.flow, r.api, r.app, r.message].some(v => String(v || '').toLowerCase().includes(epText)));
-  if (scoped.length < 3) scoped = rows;
-  const first = (arch?.simple_flow && arch.simple_flow[0]) || ep?.api || ep?.app || scoped.find(r => r.app)?.app || 'Application';
-  let flow = [first];
-  const method = (arch?.method || ep?.method || '').toUpperCase();
-  const endpoint = arch?.endpoint || ep?.endpoint || '';
-  if (method && endpoint && endpoint !== '/') flow.push(method + ' ' + endpoint);
-  _topoRowSignals(scoped, ep).forEach(x => flow.push(x));
-  flow.push('Response');
-  flow = _normalizeFlowOrder(flow.filter((x, i, a) => x && a.findIndex(y => String(y).toLowerCase() === String(x).toLowerCase()) === i));
-  if (flow.length < 3) return null;
-  const errors = scoped.filter(r => ['ERROR', 'FAILURE'].includes(String(r.level || '').toUpperCase())).length;
-  const lats = scoped.map(r => Number(r.latency || 0)).filter(Boolean);
-  const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : 0;
-  const tierOf = s => { const low = String(s).toLowerCase(); if (low === 'response') return 'Client'; if (/^(get|post|put|delete|patch) /.test(low)) return 'Gateway'; if (/database|redis|oracle|mysql|postgres|mongo|dynamo/.test(low)) return 'Data'; if (/salesforce|bureau|cbs|core|lms|provider|gateway|bbps|setu|upi|message broker/.test(low)) return 'External'; return flow.indexOf(s) === 0 ? 'API' : 'Service'; };
-  const nodes = flow.map((name, i) => ({ id: name, name, tier: tierOf(name), count: scoped.length, errors: (i === flow.length - 2 ? errors : 0), warns: 0, avg_latency_ms: (i > 0 && i < flow.length - 1 ? avg : 0), health: errors && i === flow.length - 2 ? 'critical' : 'ok' }));
-  const edges = flow.slice(0, -1).map((from, i) => ({ from, to: flow[i + 1], count: Math.max(1, scoped.length), errors: (i === flow.length - 3 ? errors : 0), avg_latency_ms: i ? avg : 0, label: 'calls', error_rate: Math.round(errors / Math.max(1, scoped.length) * 1000) / 10 }));
-  return { nodes, edges, simple_flow: flow, endpoint: endpoint || '/', method, hints: ['Client-side topology synthesis used active uploaded rows to enrich sparse backend flow.'] };
-}
-
 // ─── MAIN: renderArchitectureSvg (replaces old version) ───────────────────
 function renderArchitectureSvg(ep){
   let arch=ep.architecture||{};
-  const sparse=!(arch.nodes||[]).length || ((arch.simple_flow||[]).length<=3);
-  const clientArch=sparse ? _buildClientTopologyFromRows(ep, arch) : null;
-  if(clientArch){ arch=Object.assign({}, arch, clientArch); ep.architecture=arch; }
   let nodes=arch.nodes||[], edges=arch.edges||[];
+
+  // V11: If backend gave ≤ 2 stages, try client-side log analysis first
+  const backendFlow = arch.simple_flow || ep.flow_steps || [];
+  if (backendFlow.length <= 2 && typeof window._buildTopologyFromRawLogs === 'function' && (window._allRows||[]).length > 0) {
+    const apiName = ep.api_name || (ep.architecture||{}).api_name || '';
+    const csArch = window._buildTopologyFromRawLogs(window._allRows, apiName);
+    if (csArch && csArch.simple_flow && csArch.simple_flow.length >= 3) {
+      console.log('[ObserveX] V11 client-side topology:', csArch.simple_flow);
+      // Merge hints so user knows which source drove the diagram
+      csArch.hints = [...(csArch.hints||[]), ...(arch.hints||[])];
+      arch = csArch;
+      nodes = arch.nodes || [];
+      edges = arch.edges || [];
+    }
+  }
 
   // Fallback: render clean pill-chain if no graph nodes
   if(!nodes.length){
@@ -963,5 +945,172 @@ function useSelectedTopology(){
     }
   },500);
 
-  console.log('[ObserveX] V6.2 parallel upload + topology flow-fix loaded ✓');
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // V11 CLIENT-SIDE TOPOLOGY ANALYZER
+  // Scans _allRows directly to extract a flow topology when the backend
+  // response is too thin (≤ 2 stages). MuleSoft-aware pattern matching.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const _CSA_EXTERNAL = [
+    ['bbps','BBPS'], ['setu','Setu'], ['upi','UPI Gateway'],
+    ['flexcube','Flexcube'], ['fcubs','Flexcube'], ['core banking','Flexcube'],
+    ['lms','LMS Core'], ['loan management','LMS Core'],
+    ['salesforce','Salesforce'], ['sfdc','Salesforce'],
+    ['gupshup','Gupshup'], ['kotak','Kotak NACH'],
+    ['nach','Kotak NACH'], ['emandate','Kotak eMandate'],
+    ['htmltopdf','HTML/PDF Engine'], ['html-to-pdf','HTML/PDF Engine'],
+    ['kafka','Message Broker'], ['s3','AWS S3'],
+    ['redis','Redis Cache'], ['elastic','Elasticsearch'],
+    ['payment engine','Payment Engine'],
+    ['twilio','SMS Gateway'], ['sendgrid','Email Service'],
+  ];
+
+  const _CSA_MULE_ROUTE = /\[([A-Za-z0-9_.\-]+-api)\]\.(get|post|put|delete|patch|head):([^\s\]@)]+)/i;
+  const _CSA_BEFORE_AFTER = /(?:before|after)\s+(?:request|response)\s+to\s+['""]?([A-Za-z][A-Za-z0-9_.\-]{2,60})/i;
+  const _CSA_CALLING = /(?:calling|invoking|request to|connecting to|response from)\s+['""]?([A-Za-z][A-Za-z0-9_.\-]{2,60})/i;
+  const _CSA_PROCESSOR = /\[processor:\s*([^\];]+)/i;
+  const _CSA_FLOW_NAME = /Flow Name:\s*'([^']+)'/i;
+  const _CSA_ENTRY = /\bentry\s*>>|\bcall-entry\s*>>|entered into|flow started|start of the flow/i;
+  const _CSA_EXIT = /\bcall-exit\s*<<|\bexit\s*<<|exited from|flow completed/i;
+  const _CSA_HTTP_METHOD = /(?:http\.method|http\.verb|method)\s*[=:'"]+\s*(GET|POST|PUT|DELETE|PATCH)/i;
+  const _CSA_HTTP_PATH = /(?:http\.url|http\.path|http\.uri|path|endpoint|uri)\s*[=:'"]+\s*(\/[^\s'"]+)/i;
+
+  function _csaTierOf(name) {
+    const low = (name||'').toLowerCase();
+    if (/^(response|client)$/.test(low)) return 'Client';
+    if (/^(get|post|put|delete|patch)\s/.test(low)) return 'Gateway';
+    if (_CSA_EXTERNAL.some(([k]) => low.includes(k))) return 'External';
+    if (/db|database|redis|mongo|oracle|postgres|dynamo|elastic/.test(low)) return 'Data';
+    if (/api|mule|\bs-[a-z]/.test(low)) return 'API';
+    return 'Service';
+  }
+
+  function _csaDedup(arr) {
+    const seen = new Set();
+    return arr.filter(x => { const k = (x||'').toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  /**
+   * Build a topology flow from the raw _allRows log data.
+   * Returns { simple_flow, nodes, edges } or null if insufficient data.
+   */
+  window._buildTopologyFromRawLogs = function(rows, apiName) {
+    if (!rows || rows.length < 3) return null;
+    const targetApi = (apiName||'').toLowerCase();
+
+    // Filter to rows for this API
+    const relevant = rows.filter(r => {
+      const app = (r.app||r.api||'').toLowerCase();
+      return !targetApi || app.includes(targetApi) || targetApi.includes(app);
+    }).slice(0, 2000);
+
+    if (relevant.length < 2) return null;
+
+    let detectedApi = apiName || '';
+    let detectedMethod = '';
+    let detectedEndpoint = '';
+    const stages = [];
+    const seenDownstreams = new Set();
+
+    for (const r of relevant) {
+      const msg = String(r.message || '');
+
+      // Extract Mule route: [api-name].GET:/endpoint
+      const routeM = _CSA_MULE_ROUTE.exec(msg);
+      if (routeM) {
+        detectedApi = detectedApi || routeM[1];
+        detectedMethod = detectedMethod || routeM[2].toUpperCase();
+        detectedEndpoint = detectedEndpoint || routeM[3].replace(/\\/g, '/').replace(/\/+/g, '/');
+      }
+
+      // HTTP method/path fallback
+      if (!detectedMethod) {
+        const mm = _CSA_HTTP_METHOD.exec(msg); if (mm) detectedMethod = mm[1].toUpperCase();
+      }
+      if (!detectedEndpoint || detectedEndpoint === '/') {
+        const pm = _CSA_HTTP_PATH.exec(msg); if (pm) detectedEndpoint = pm[1];
+      }
+
+      // Entry / exit signals
+      if (_CSA_ENTRY.test(msg)) stages.push('Request Entry');
+      if (_CSA_EXIT.test(msg)) stages.push('Response Exit');
+
+      // Explicit downstream mentions
+      const bam = _CSA_BEFORE_AFTER.exec(msg);
+      if (bam) {
+        const ds = bam[1].replace(/['"]/g,'').trim();
+        if (ds.length > 2 && !seenDownstreams.has(ds.toLowerCase())) {
+          seenDownstreams.add(ds.toLowerCase()); stages.push(ds);
+        }
+      }
+      const callM = _CSA_CALLING.exec(msg);
+      if (callM) {
+        const ds = callM[1].replace(/['"]/g,'').trim();
+        const bad = new Set(['before','after','request','success','error','log','api','null','true','false']);
+        if (ds.length > 2 && !bad.has(ds.toLowerCase()) && !seenDownstreams.has(ds.toLowerCase())) {
+          seenDownstreams.add(ds.toLowerCase()); stages.push(ds);
+        }
+      }
+
+      // Known external system keyword scan
+      const msgLow = msg.toLowerCase();
+      for (const [keyword, label] of _CSA_EXTERNAL) {
+        if (msgLow.includes(keyword) && !stages.includes(label)) {
+          stages.push(label);
+        }
+      }
+    }
+
+    // Build the flow
+    const apiNode = detectedApi || apiName || 'Application';
+    const epLabel = (detectedMethod && detectedEndpoint && detectedEndpoint !== '/')
+      ? `${detectedMethod} ${detectedEndpoint}` : '';
+
+    const SKIP = new Set(['common','default','logging','logger','subflow','processor','flow','service','mule-api','api-router','unknown','none','null']);
+    const cleaned = _csaDedup([
+      ...(stages.includes('Request Entry') ? ['Request Entry'] : []),
+      ...(epLabel ? [epLabel] : []),
+      ...stages.filter(s => s !== 'Request Entry' && s !== 'Response Exit' && s !== 'Response'),
+    ]).filter(s => !SKIP.has((s||'').toLowerCase()) && s.length > 1);
+
+    const flow = _csaDedup([apiNode, ...cleaned, 'Response']);
+    if (flow.length < 3) return null;  // Not enough signal
+
+    // Build nodes and edges
+    const reqCount = relevant.length;
+    const errCount = relevant.filter(r => (r.level||'').toUpperCase() === 'ERROR' || (r.level||'').toUpperCase() === 'FAILURE').length;
+    const lats = relevant.map(r => Number(r.latency||0)).filter(Boolean);
+    const avgLat = lats.length ? Math.round(lats.reduce((a,b)=>a+b,0)/lats.length) : 0;
+
+    const nodes = flow.map((name, i) => ({
+      id: name, name, tier: _csaTierOf(name),
+      count: i <= 1 ? reqCount : Math.max(1, reqCount - i),
+      errors: i === flow.length - 2 ? errCount : 0,
+      warns: 0,
+      avg_latency_ms: i > 0 && i < flow.length - 1 ? avgLat : 0,
+      health: (errCount && i === flow.length - 2) ? 'critical' : 'ok',
+    }));
+
+    const edges = [];
+    for (let i = 0; i < flow.length - 1; i++) {
+      const isPenult = (flow[i+1] === flow[flow.length - 2]);
+      edges.push({
+        from: flow[i], to: flow[i+1],
+        count: Math.max(1, reqCount),
+        errors: isPenult ? errCount : 0,
+        avg_latency_ms: i > 0 ? avgLat : 0,
+        error_rate: isPenult ? Math.round(errCount/Math.max(1,reqCount)*1000)/10 : 0,
+        label: 'calls',
+      });
+    }
+
+    return {
+      simple_flow: flow, nodes, edges,
+      hints: [`Client-side analysis detected ${flow.length} stages from ${relevant.length} log rows.`],
+      traces: [], matrix: edges.map(e => ({from:e.from,to:e.to,calls:e.count,errors:e.errors,avg_latency_ms:e.avg_latency_ms,error_rate:e.error_rate})),
+    };
+  };
+
+    console.log('[ObserveX] V6.2 parallel upload + topology flow-fix loaded ✓');
 })();
