@@ -2065,15 +2065,12 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
     }
 
 
-# ── V38 Mule flow teaching + registry delete fixes ───────────────────────────
-def _extract_mule_route_from_text(text: str):
-    """Extract Mule API, HTTP method and route from log text.
+# ── V40 fast upload + real Mule topology engine ───────────────────────────────
+# This replaces the previous tag-chain topology. It groups Mule lines by event id,
+# builds a business flow from ENTRY/CALL-ENTRY/processor/CALL-EXIT/EXIT semantics,
+# and always returns Client → API → Endpoint → business stages → downstream → Response.
 
-    Handles real Mule route variants such as:
-    [s-api].get:\paymentEngine\loanDetails:s-api-config
-    [s-api].post:\loan\receipt:application\json:s-api-config
-    [s-api].post:/htmltopdfv2:text\html:s-api-config/processors/2
-    """
+def _extract_mule_route_from_text(text: str):
     msg = str(text or '').replace('\r', '\\r')
     m = re.search(r'\[([A-Za-z0-9_.-]+-api)\]\.(get|post|put|delete|patch|head|options):(.+?)(?:-config|\s|\]|\)|@)', msg, re.I)
     if not m:
@@ -2088,9 +2085,20 @@ def _extract_mule_route_from_text(text: str):
     endpoint = _normalise_endpoint(endpoint) or '/'
     return api, method, endpoint
 
+def _trace_id_from_row(row: dict) -> str:
+    return str(row.get('trace') or row.get('event') or row.get('trace_id') or '')[:160]
+
+def _extract_processor_from_msg(msg: str) -> str:
+    m = re.search(r'\[processor:\s*([^;\]]+)', str(msg or ''), re.I)
+    return m.group(1) if m else ''
+
+def _flow_name_from_common_logger(msg: str) -> str:
+    m = re.search(r"Flow Name:\s*'\s*([^']+?)\s*'", str(msg or ''), re.I)
+    return _clean_service_name(m.group(1)) if m else ''
+
 def _infer_business_label(text: str, processor: str = '', endpoint: str = ''):
     msg = str(text or '').lower(); proc = str(processor or '').lower(); ep = str(endpoint or '').lower()
-    if 'loan\\receipt' in msg or '/loan/receipt' in ep or 'loan-receipt' in proc: return 'Loan Receipt'
+    if 'loan\\receipt' in msg or '/loan/receipt' in ep or 'loan-receipt' in proc or 'receipt-token' in proc: return 'Loan Receipt'
     if 'paymentengine\\loandetails' in msg or '/paymentengine/loandetails' in ep or 'loan-details' in proc: return 'Loan Details'
     if 'generate-otp' in msg or 'generate-otp' in proc or '/generate-otp' in ep: return 'Generate OTP'
     if 'verify-otp' in msg or 'verify-otp' in proc or '/verify-otp' in ep: return 'Verify OTP'
@@ -2099,19 +2107,26 @@ def _infer_business_label(text: str, processor: str = '', endpoint: str = ''):
     if 'emandate' in msg or 'mandate' in proc: return 'Kotak eMandate'
     return ''
 
+def _endpoint_label(method: str, endpoint: str, business: str = '') -> str:
+    if method and endpoint and endpoint != '/':
+        return f'{method} {endpoint}'
+    return business or 'API Endpoint'
+
 def _processor_stage_name(processor: str, message: str = '', endpoint: str = ''):
     proc = _clean_service_name(_normalise_mule_component_name(processor or '')); low = proc.lower()
-    if not proc: return _infer_business_label(message, processor, endpoint) or ''
-    if 'entry-logger' in low: return 'Request Entry'
-    if 'exit-logger' in low: return 'Response Exit'
-    if 'token' in low or 'jwt' in low: return 'Token / Auth'
+    if not proc:
+        return _infer_business_label(message, processor, endpoint) or ''
+    if 'entry-logger' in low or 'call-entry-logger' in low: return 'Request Entry'
+    if 'exit-logger' in low or 'call-exit-logger' in low: return 'Response Exit'
+    if 'token' in low or 'jwt' in low or 'authorization' in low: return 'Token / Auth'
     if 'google' in low and 'secops' in low: return 'Security Logging'
     if 'loan-details' in low: return 'Loan Details'
     if 'loan-receipt' in low or 'receipt' in low: return 'Loan Receipt'
     if 'generate-otp' in low: return 'Generate OTP'
     if 'verify-otp' in low: return 'Verify OTP'
     if 'html-to-pdf' in low or 'htmltopdf' in low: return 'HTML to PDF'
-    if 'make-api-call' in low:
+    if 'crif-sms' in low: return 'CRIF SMS'
+    if 'make-api-call' in low or 'http-request' in low or 'request' == low:
         biz = _infer_business_label(message, processor, endpoint)
         return (biz + ' Downstream Call') if biz else 'Downstream Call'
     if 'sub-flow' in low or 'subflow' in low:
@@ -2120,71 +2135,117 @@ def _processor_stage_name(processor: str, message: str = '', endpoint: str = '')
 
 def _extract_downstream_name(message: str, processor: str = '', endpoint: str = ''):
     msg = str(message or ''); low = msg.lower()
-    for pat in [r'(?:before|after)\s+request\s+to\s+([A-Za-z][A-Za-z0-9_.-]{2,80})', r'(?:calling|invoking|request to)\s+([A-Za-z][A-Za-z0-9_.-]{2,80})', r'"(?:target|service|downstream|dependency|system)"\s*:\s*"([^"]+)"', r'https?://([^/\s"\']+)']:
+    # explicit destinations first
+    for pat in [r'(?:before|after)\s+request\s+to\s+["\']?([A-Za-z][A-Za-z0-9_.-]{2,80})',
+                r'(?:calling|invoking|request to|response from)\s+["\']?([A-Za-z][A-Za-z0-9_.-]{2,80})',
+                r'"(?:target|service|downstream|dependency|system)"\s*:\s*"([^"]+)"',
+                r'https?://([^/\s"\']+)']:
         m = re.search(pat, msg, re.I)
         if m:
             d = _clean_service_name(m.group(1))
-            if d and d.lower() not in {'before','after','request','success','error','log'}: return d
+            if d and d.lower() not in {'before','after','request','success','error','log','api'}:
+                return d
+    # business-specific fallbacks from the real uploaded logs
     if 'salesforce' in low or 'sfdc' in low: return 'Salesforce'
-    if 'gupshup' in low or 'otp' in low: return 'Gupshup'
+    if 'gupshup' in low or 'otp' in low or 'encrdata=' in low: return 'Gupshup'
     if 'paymentengine' in low: return 'Payment Engine'
-    if 'loan details' in low or 'loan receipt' in low or 'lms' in low: return 'LMS Core'
+    if 'loan details' in low or 'loan receipt' in low or 'lms' in low or 'token generated' in low: return 'LMS Core'
     if 'kotak' in low or 'emandate' in low or 'nach' in low: return 'Kotak NACH'
-    if 'htmltopdf' in low: return 'HTML/PDF Engine'
+    if 'htmltopdf' in low or 'pdf' in low: return 'HTML/PDF Engine'
     return 'External System'
 
 def _clean_flow_sequence(seq):
-    out=[]; skip={'common','default','logging','logger','mule-subflow','external-service','service','flow','processor','subflow','mule-api'}
+    out=[]
+    skip={'common','default','logging','logger','mule-subflow','external-service','service','flow','processor','subflow','mule-api','api-router'}
     for item in seq or []:
         x=_clean_service_name(item)
-        if not x or x.lower() in skip or _looks_like_processor_event_name(x): continue
-        if not any(y.lower()==x.lower() for y in out): out.append(x)
+        if not x or x.lower() in skip or _looks_like_processor_event_name(x):
+            continue
+        if len(x) > 80 and ' ' not in x:
+            continue
+        if not any(y.lower()==x.lower() for y in out):
+            out.append(x)
+    # remove duplicate generic downstream if a business downstream exists
     if 'Downstream Call' in out and any(x.endswith(' Downstream Call') for x in out):
         out=[x for x in out if x!='Downstream Call']
-    return out[:12]
+    return out[:14]
+
+def _stage_order(stage: str) -> int:
+    low = str(stage or '').lower()
+    if 'request entry' in low: return 10
+    if low.startswith(('get ', 'post ', 'put ', 'delete ', 'patch ')): return 20
+    if 'token' in low or 'auth' in low: return 30
+    if 'loan receipt' in low or 'loan details' in low or 'generate otp' in low or 'verify otp' in low or 'html to pdf' in low or 'kotak' in low: return 40
+    if 'downstream' in low: return 50
+    if 'external' in low or 'salesforce' in low or 'gupshup' in low or 'core' in low or 'nach' in low: return 60
+    if 'response exit' in low: return 80
+    if 'response' in low: return 90
+    return 45
+
+def _extract_flow_steps_from_trace(api_name: str, trace_rows: list, endpoint_hint: str = ''):
+    rows = sorted(trace_rows or [], key=lambda r: str(r.get('time') or ''))
+    api = _clean_service_name(api_name) or ''
+    method = ''; endpoint = endpoint_hint or ''; stages=[]; business=''
+    for r in rows:
+        msg = str(r.get('message') or '')
+        a,m,ep = _extract_mule_route_from_text(msg)
+        if a: api = api or a
+        if m: method = method or m
+        if ep and ep != '/': endpoint = endpoint or ep
+        proc = _extract_processor_from_msg(msg) or r.get('flow') or _flow_name_from_common_logger(msg)
+        business = business or _infer_business_label(msg, proc, endpoint)
+        low = msg.lower()
+        if ' entry >>' in low or 'call-entry >>' in low or 'entered into' in low or re.search(r'\bflow started\b|start of the flow|get send otp', low):
+            stages.append('Request Entry')
+        if method or endpoint or business:
+            stages.append(_endpoint_label(method, endpoint, business))
+        st = _processor_stage_name(proc, msg, endpoint)
+        if st:
+            stages.append(st)
+        # external system markers
+        if re.search(r'\b(before|after)\b.*\b(request|loan details|encrypt|api)\b|otp success|otp error|salesforce|Token Generated|after loan details|verify otp success|verify otp error', msg, re.I):
+            ds = _extract_downstream_name(msg, proc, endpoint)
+            if ds and ds != 'External System':
+                stages.append(ds)
+            elif 'Downstream Call' in st:
+                stages.append(ds)
+        if ' call-exit <<' in low or ' exit <<' in low or 'exited from' in low or 'flow completed' in low:
+            stages.append('Response Exit')
+    api = api or _clean_service_name(api_name) or 'Application'
+    flow = [api] + sorted(_clean_flow_sequence(stages), key=_stage_order)
+    if not any(str(x).lower() == 'response' for x in flow):
+        flow.append('Response')
+    return _clean_flow_sequence(flow), method, endpoint or '/'
 
 def _extract_flow_steps_from_mule_rows(api_name: str, rows: list, endpoint: str = ''):
-    api = _clean_service_name(api_name) or 'Application'
-    steps=[api]; processors=[]; route_method=''; route_endpoint=endpoint or ''; 
+    # Build from the richest trace/event, not all rows mixed together. This prevents Response → API reversed maps.
+    groups={}
     for r in rows or []:
-        msg=str(r.get('message') or '')
-        a,m,ep=_extract_mule_route_from_text(msg)
-        if a and (not api or api=='Application'): api=a; steps[0]=api
-        if m: route_method = route_method or m
-        if ep and ep != '/': route_endpoint = route_endpoint or ep
-        pm=re.search(r'\[processor:\s*([^;\]]+)', msg, re.I)
-        proc=pm.group(1) if pm else (r.get('flow') or '')
-        if proc: processors.append((proc,msg,route_endpoint))
-    business=''
-    for proc,msg,ep in processors[:100]:
-        business = business or _infer_business_label(msg, proc, route_endpoint)
-    if route_method and route_endpoint and route_endpoint != '/': steps.append(f'{route_method} {route_endpoint}')
-    elif business: steps.append(business)
-    for proc,msg,ep in processors[:200]:
-        st=_processor_stage_name(proc,msg,route_endpoint)
-        if st: steps.append(st)
-        if re.search(r'\b(before|after)\s+(?:loan details|request|encrypt|api)|success|error|completed|Token Generated', msg, re.I):
-            if 'Downstream Call' in st or 'before request' in msg.lower() or 'after loan details' in msg.lower() or 'salesforce' in msg.lower() or 'otp success' in msg.lower() or 'verify otp' in msg.lower():
-                steps.append(_extract_downstream_name(msg, proc, route_endpoint))
-    if not any(str(x).lower().startswith('response') for x in steps): steps.append('Response')
-    return _clean_flow_sequence(steps), route_method, route_endpoint or '/'
+        tid=_trace_id_from_row(r) or 'all'
+        groups.setdefault(tid, []).append(r)
+    if not groups:
+        return _clean_flow_sequence([api_name or 'Application', 'Response']), '', endpoint or '/'
+    def score(items):
+        text='\n'.join(str(x.get('message') or '') for x in items[:100])
+        return (len(set(_extract_processor_from_msg(x.get('message') or '') for x in items)), len(items), 1 if re.search(r'ENTRY|CALL-ENTRY|processor:', text, re.I) else 0)
+    best=max(groups.values(), key=score)
+    return _extract_flow_steps_from_trace(api_name, best, endpoint)
 
 def _mule_row_parts(row):
-    msg = row.get("message", "") or ""; api = row.get("app") or "unknown-api"; method = ""; endpoint = row.get("endpoint") or ""
+    msg = row.get('message', '') or ''; api = row.get('app') or 'unknown-api'; method = ''; endpoint = row.get('endpoint') or ''
     a,m,ep = _extract_mule_route_from_text(msg)
     if a: api=a
     if m: method=m
     if ep and ep != '/': endpoint=ep
-    flow = row.get("flow") or ""
-    fm = re.search(r"\[processor:\s*([^;\]]+)", msg, re.I)
-    if fm: flow = _processor_stage_name(fm.group(1), msg, endpoint)
-    sm = re.search(r"processors/(\d+)", msg, re.I); step = int(sm.group(1)) if sm else 0
-    stage = "After Response" if re.search(r"\b(after|success|completed|exited)\b", msg, re.I) else "Before Request" if re.search(r"\b(before|entered|started)\b", msg, re.I) else "Processing"
-    return api, method, endpoint, flow, step, stage
+    proc = _extract_processor_from_msg(msg) or row.get('flow') or _flow_name_from_common_logger(msg)
+    flow = _processor_stage_name(proc, msg, endpoint) or _infer_business_label(msg, proc, endpoint) or api
+    stage = 'Response' if re.search(r'\b(after|success|completed|exited|EXIT)\b', msg, re.I) else 'Request' if re.search(r'\b(before|entered|started|ENTRY)\b', msg, re.I) else 'Processing'
+    return api, method, endpoint, flow, 0, stage
 
 def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) -> list:
     flow, _, _ = _extract_flow_steps_from_mule_rows(api_name, rows or [], '')
-    if len(flow) >= 2: return flow
+    if len(flow) >= 3:
+        return flow
     api = _clean_service_name(api_name) or 'Application'; steps=[api]
     if arch:
         for item in arch.get('simple_flow', []) or []: steps.append(item)
@@ -2193,40 +2254,59 @@ def _build_clean_execution_flow(api_name: str, rows: list, arch: dict = None) ->
     return _clean_flow_sequence(steps) or [api, 'Response']
 
 def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, user_id: int, api_name: str = '', endpoint: str = '') -> dict:
-    mule_rows = [r for r in (rows or []) if "MuleRuntime" in (r.get("message","") or "") or "processor:" in (r.get("message","") or "")]
+    mule_rows = [r for r in (rows or []) if 'MuleRuntime' in (r.get('message','') or '') or 'processor:' in (r.get('message','') or '') or 'Application Name:' in (r.get('message','') or '')]
+    source_rows = mule_rows or (rows or [])
+    # Identify API/method/endpoint from any row when api_name was not passed.
+    for r in source_rows[:200]:
+        a,m,ep=_extract_mule_route_from_text(r.get('message','') or '')
+        if a and not api_name: api_name=a
+        if ep and ep != '/' and not endpoint: endpoint=ep
     if mule_rows:
         flow, method, ep = _extract_flow_steps_from_mule_rows(api_name, mule_rows, endpoint)
-        req_count=len(mule_rows); err_count=sum(1 for r in mule_rows if str(r.get("level","")).upper() in ("ERROR","FAILURE"))
-        lats=[int(r.get("latency") or 0) for r in mule_rows if str(r.get("latency") or "").isdigit() and int(r.get("latency") or 0)>0]
-        avg_lat=round(sum(lats)/len(lats)) if lats else 0
-        nodes=[]; edges=[]
-        for i,name in enumerate(flow):
-            tier=_service_tier(name)
-            if i==0: tier="API"
-            if str(name).lower().startswith(('get ','post ','put ','delete ','patch ')): tier="Gateway"
-            if name=="Response": tier="Client"
-            error_here=err_count if (i==len(flow)-2 and err_count) else 0
-            nodes.append({"id":name,"name":name,"tier":tier,"count":req_count if i in (0,1) else 1,"errors":error_here,"warns":0,"avg_latency_ms":avg_lat if error_here else 0,"health":"critical" if error_here else "ok"})
-        for a,b in zip(flow, flow[1:]):
-            eerr=err_count if b==flow[-2] else 0
-            edges.append({"from":a,"to":b,"count":req_count or 1,"errors":eerr,"avg_latency_ms":avg_lat if eerr else 0,"label":"calls","error_rate":round(eerr/max(1,req_count)*100,1)})
-        trace_map={}
-        for r in mule_rows[:2000]:
-            trace=r.get("trace") or r.get("event") or ""
-            if not trace: continue
-            api,m,e,proc_flow,step,stage=_mule_row_parts(r)
-            service=proc_flow or _infer_business_label(r.get("message",""),'',ep) or api_name or api
-            tr=trace_map.setdefault(trace,{"trace":trace,"api":api_name or api,"endpoint":ep or endpoint or e or "/","rows":[],"errors":0,"latency":0})
-            tr["rows"].append({"time":r.get("time",""),"service":service,"stage":stage,"level":r.get("level",""),"message":(r.get("message","") or "")[:260],"latency":int(r.get("latency") or 0)})
-            tr["errors"] += 1 if str(r.get("level","")).upper() in ("ERROR","FAILURE") else 0
-            tr["latency"] = max(tr["latency"], int(r.get("latency") or 0))
-        traces=sorted(trace_map.values(), key=lambda t:(-t["errors"], -len(t["rows"])))[:12]
-        if not traces: traces,_ = _synthetic_trace_and_matrix(flow, req_count, err_count, avg_lat)
-        matrix=[{"from":e["from"],"to":e["to"],"calls":e["count"],"errors":e["errors"],"avg_latency_ms":e["avg_latency_ms"],"error_rate":e["error_rate"]} for e in edges]
-        tiers=sorted(set(n["tier"] for n in nodes), key=lambda t: {"Client":0,"Gateway":1,"API":2,"Service":3,"External":4,"Data":5}.get(t,9))
-        return {"nodes":nodes,"edges":edges,"traces":traces,"matrix":matrix,"tiers":tiers,"simple_flow":flow,"endpoint":ep or endpoint or "/","method":method,"hints":["V38: Mule routes are parsed as endpoints instead of generic '/' rows.","Processor/event IDs are grouped into business stages.","Add downstream names in API Registry to override inferred external systems."]}
-    return {"nodes":[{"id":"Client","name":"Client","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"},{"id":api_name or "Application","name":api_name or "Application","tier":"API","count":len(rows or []),"errors":sum(1 for r in rows or [] if r.get("level") in ("ERROR","FAILURE")),"warns":0,"avg_latency_ms":0,"health":"ok"},{"id":"Response","name":"Response","tier":"Client","count":len(rows or []),"errors":0,"warns":0,"avg_latency_ms":0,"health":"ok"}],"edges":[{"from":"Client","to":api_name or "Application","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"request","error_rate":0},{"from":api_name or "Application","to":"Response","count":len(rows or []),"errors":0,"avg_latency_ms":0,"label":"returns","error_rate":0}],"traces":[],"matrix":[],"tiers":["Client","API"],"simple_flow":["Client",api_name or "Application","Response"],"hints":["No Mule processor rows detected; showing a minimal API flow."]}
-
+    else:
+        api = _clean_service_name(api_name) or 'Application'
+        method = ''
+        ep = endpoint or '/'
+        flow = _clean_flow_sequence([api, _endpoint_label(method, ep, ''), 'Response'])
+    # Force sane direction and boundary nodes.
+    api_display = _clean_service_name(api_name) or (flow[0] if flow else 'Application')
+    if flow and flow[0].lower() == 'response':
+        flow = list(reversed(flow))
+    if not flow or flow[0].lower() == 'client':
+        flow = [api_display] + [x for x in flow if x.lower() not in {'client', api_display.lower()}]
+    if flow[-1].lower() != 'response':
+        flow.append('Response')
+    flow = _clean_flow_sequence(flow)
+    req_count=len(source_rows); err_count=sum(1 for r in source_rows if str(r.get('level','')).upper() in ('ERROR','FAILURE'))
+    lats=[int(r.get('latency') or 0) for r in source_rows if str(r.get('latency') or '').isdigit() and int(r.get('latency') or 0)>0]
+    avg_lat=round(sum(lats)/len(lats)) if lats else 0
+    nodes=[]; edges=[]
+    for i,name in enumerate(flow):
+        tier=_service_tier(name)
+        if i==0: tier='API'
+        if str(name).lower().startswith(('get ','post ','put ','delete ','patch ')): tier='Gateway'
+        if name=='Response': tier='Client'
+        if any(x in name.lower() for x in ['salesforce','gupshup','core','nach','external system','html/pdf']): tier='External'
+        error_here=err_count if (i==len(flow)-2 and err_count) else 0
+        nodes.append({'id':name,'name':name,'tier':tier,'count':req_count if i in (0,1) else 1,'errors':error_here,'warns':0,'avg_latency_ms':avg_lat if error_here else 0,'health':'critical' if error_here else 'ok'})
+    for a,b in zip(flow, flow[1:]):
+        eerr=err_count if b==flow[-2] else 0
+        edges.append({'from':a,'to':b,'count':req_count or 1,'errors':eerr,'avg_latency_ms':avg_lat if eerr else 0,'label':'calls','error_rate':round(eerr/max(1,req_count or 1)*100,1)})
+    trace_map={}
+    for r in source_rows[:2500]:
+        trace=_trace_id_from_row(r)
+        if not trace: continue
+        api,m,e,proc_flow,step,stage=_mule_row_parts(r)
+        service=proc_flow or _infer_business_label(r.get('message',''),'',ep) or api_name or api
+        tr=trace_map.setdefault(trace,{'trace':trace,'api':api_name or api,'endpoint':ep or endpoint or e or '/','rows':[],'errors':0,'latency':0})
+        tr['rows'].append({'time':r.get('time',''),'service':service,'stage':stage,'level':r.get('level',''),'message':(r.get('message','') or '')[:220],'latency':int(r.get('latency') or 0)})
+        tr['errors'] += 1 if str(r.get('level','')).upper() in ('ERROR','FAILURE') else 0
+        tr['latency'] = max(tr['latency'], int(r.get('latency') or 0))
+    traces=sorted(trace_map.values(), key=lambda t:(-t['errors'], -len(t['rows'])))[:12]
+    if not traces: traces,_ = _synthetic_trace_and_matrix(flow, req_count, err_count, avg_lat)
+    matrix=[{'from':e['from'],'to':e['to'],'calls':e['count'],'errors':e['errors'],'avg_latency_ms':e['avg_latency_ms'],'error_rate':e['error_rate']} for e in edges]
+    tiers=sorted(set(n['tier'] for n in nodes), key=lambda t: {'Client':0,'Gateway':1,'API':2,'Service':3,'External':4,'Data':5}.get(t,9))
+    return {'nodes':nodes,'edges':edges,'traces':traces,'matrix':matrix,'tiers':tiers,'simple_flow':flow,'endpoint':ep or endpoint or '/','method':method,'hints':['V40: topology is built from event-grouped Mule ENTRY/CALL/processor/EXIT semantics.','Upload response is lighter; large raw files are saved asynchronously to keep 10MB uploads fast.','Registry delete is available and processor/event pseudo APIs are filtered.']}
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -2456,15 +2536,24 @@ def analyse():
             return jsonify({"error": "Session expired. Please login again."}), 401
         result = analyse_log_text(raw, query, env, fname, user.id)
         result["source_health"] = {"file_upload":"active", "api_ingestion":"available", "s3":"not_connected", "last_ingest":"now"}
-        # Persist log rows in Postgres so they survive sign-out/sign-in (up to 2000 rows)
-        rows_to_store = result.get("log_rows", [])[:2000]
+        # V40 fast-upload path: keep full parsing server-side enough for topology, but send a light response.
+        # Returning thousands of full raw log lines was the main reason 10MB uploads felt slow in the browser.
+        full_rows = result.get("log_rows", []) or []
+        rows_to_store = full_rows[:5000]
+        def _light_row(r):
+            rr = dict(r or {})
+            msg = str(rr.get("message") or "")
+            if len(msg) > 700:
+                rr["message"] = msg[:700] + " …"
+            return rr
+        client_rows = [_light_row(r) for r in full_rows[:1000]]
         result_summary = {k: v for k, v in result.items() if k != "log_rows"}
 
         ls = LogSession(user_id=user.id, environment=env, filename=fname,
                         total_lines=result["total"], error_count=result["errors"],
                         warn_count=result["warns"], avg_latency=result["latency"],
                         apps_found=",".join(result["apps"]),
-                        log_rows_json=json.dumps(rows_to_store, default=str),
+                        log_rows_json=json.dumps([_light_row(r) for r in rows_to_store[:2000]], default=str),
                         result_json=json.dumps(result_summary, default=str))
         db.session.add(ls)
         db.session.commit()
@@ -2481,16 +2570,21 @@ def analyse():
             db.session.rollback()
             app.logger.exception("System map extraction failed (non-fatal)")
 
+        # Save the original raw file asynchronously so the HTTP upload returns quickly.
         try:
-            persist_raw_upload(user.id, ls.id, fname, raw)
+            threading.Thread(target=persist_raw_upload, args=(user.id, ls.id, fname, raw), daemon=True).start()
         except Exception:
-            app.logger.exception("Could not persist upload to volume")
+            app.logger.exception("Could not queue raw upload persistence")
         duration_ms = int((time.time()-start_ms)*1000)
         db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
         audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
         db.session.commit()
         result["session_id"] = ls.id
         result["stored"] = True
+        result["log_rows"] = client_rows
+        result["fast_upload"] = True
+        result["returned_rows"] = len(client_rows)
+        result["indexed_rows"] = len(rows_to_store)
         return jsonify(result)
     except Exception as exc:
         db.session.rollback()
