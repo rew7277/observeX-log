@@ -4,7 +4,51 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 function toggleSidebar(){let s=document.getElementById('shell');s.classList.toggle('collapsed');localStorage.setItem('observexSidebarCollapsed',s.classList.contains('collapsed')?'1':'0')}function switchTab(id,btn){document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');btn.parentElement.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));btn.classList.add('active')}
 async function safeJson(res){let d=await res.json().catch(()=>({error:'Invalid server response'}));if(!res.ok)throw new Error(d.error||'Request failed');return d}
 const dz=document.getElementById('drop-zone');['dragenter','dragover'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>uploadFiles([...e.dataTransfer.files]));document.getElementById('fileInput').addEventListener('change',e=>uploadFiles([...e.target.files]));
-async function uploadFiles(files){if(!files.length)return;let total=files.reduce((a,f)=>a+f.size,0),done=0;document.getElementById('upload-status').textContent=`Uploading ${files.length} file(s)…`;for(const file of files){const fd=new FormData();fd.append('env',document.getElementById('env').value);fd.append('logfile',file);try{let d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));addSession(d,file.name,file.size)}catch(e){alert(file.name+': '+e.message)}done+=file.size;document.getElementById('upload-progress').style.width=Math.round(done/total*100)+'%'}document.getElementById('upload-status').textContent='Upload complete. Active dataset contains '+_allRows.length+' parsed log record(s).'}
+async function uploadFiles(files){
+  if(!files.length)return;
+  const LARGE_FILE_BYTES=5*1024*1024;
+  let total=files.reduce((a,f)=>a+f.size,0),done=0;
+  const status=document.getElementById('upload-status');
+  const bar=document.getElementById('upload-progress');
+  status.textContent=`Preparing ${files.length} file(s)…`;
+
+  async function pollIngestionJob(jobId,file){
+    for(let i=0;i<120;i++){
+      await new Promise(r=>setTimeout(r,1500));
+      const job=await safeJson(await fetch('/ingestion-jobs/'+jobId));
+      status.textContent=`Analysing ${file.name}… ${job.status||'queued'}${job.lines?` · ${job.lines} lines`:''}`;
+      if(job.status==='success'){
+        const hist=await safeJson(await fetch('/history'));
+        const latest=(hist||[]).find(x=>String(x.file||'').includes(file.name)) || (hist||[])[0];
+        if(latest) await reloadSession(latest.id, latest.file||file.name);
+        return;
+      }
+      if(job.status==='failed') throw new Error(job.error||'Async ingestion failed');
+    }
+    throw new Error('Analysis still running. Open Upload History and reload the session after it completes.');
+  }
+
+  for(const file of files){
+    const fd=new FormData();
+    fd.append('env',document.getElementById('env').value);
+    fd.append('logfile',file);
+    try{
+      if(file.size>=LARGE_FILE_BYTES){
+        status.textContent=`Fast upload enabled for ${file.name} (${Math.round(file.size/1024/1024)} MB)…`;
+        const queued=await safeJson(await fetch('/analyse/async',{method:'POST',body:fd}));
+        if(!queued.job_id) throw new Error(queued.error||'Unable to queue ingestion');
+        await pollIngestionJob(queued.job_id,file);
+      }else{
+        status.textContent=`Uploading ${file.name}…`;
+        let d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));
+        addSession(d,file.name,file.size);
+      }
+    }catch(e){alert(file.name+': '+e.message)}
+    done+=file.size;
+    if(bar) bar.style.width=Math.round(done/total*100)+'%';
+  }
+  status.textContent='Upload complete. Active dataset contains '+_allRows.length+' parsed log record(s).';
+}
 async function analysePaste(){let raw=document.getElementById('paste-area').value.trim();if(!raw)return alert('Paste logs first');const fd=new FormData();fd.append('raw_paste',raw);fd.append('env',document.getElementById('env').value);let d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));addSession(d,'paste',raw.length)}
 function addSession(d,name,size){let sid='u'+Date.now()+Math.random().toString(16).slice(2);(d.log_rows||[]).forEach(r=>{r.uploadId=sid;r.uploadName=name;r.serverSessionId=d.session_id||''});_sessions.push({id:sid,serverId:d.session_id,name,size,result:d});recomputeAggregate();showSection('dashboard')}
 async function deleteUpload(id){let s=_sessions.find(x=>x.id===id);_sessions=_sessions.filter(x=>x.id!==id);if(s?.serverId){try{await fetch('/history?id='+encodeURIComponent(s.serverId),{method:'DELETE'})}catch(e){console.warn(e)}}recomputeAggregate();clearTrace()}function recomputeAggregate(){_allRows=_sessions.flatMap(s=>s.result.log_rows||[]);_visibleRows=[..._allRows];let results=_sessions.map(s=>s.result);let d={total:_allRows.length,errors:_allRows.filter(r=>r.level==='ERROR').length,warns:_allRows.filter(r=>r.level==='WARN').length,apps:[...new Set(_allRows.map(r=>r.app).filter(Boolean))],smart_tags:[...new Set(results.flatMap(r=>r.smart_tags||[]))],dependencies:[...new Set(results.flatMap(r=>r.dependencies||[]))],suggestions:[...new Set(results.flatMap(r=>r.suggestions||[]))],top_errors:[],findings:[],hot_traces:[],app_health:[],timeline_buckets:[],action_cards:[]};let lats=_allRows.map(r=>Number(r.latency||0)).filter(Boolean);d.latency=lats.length?Math.round(lats.reduce((a,b)=>a+b,0)/lats.length):0;d.health_score=Math.max(0,Math.min(100,100-Math.min(50,d.errors*100/Math.max(1,d.total)*5)-Math.min(25,d.warns*100/Math.max(1,d.total)*2)-(d.latency>3000?15:0)));let errMap={};_allRows.filter(r=>r.level==='ERROR'||r.level==='FAILURE').forEach(r=>{let k=(r.message.match(/(?:Exception|ERROR|failed|failure)[:\s]+([A-Za-z0-9_.:-]+)/i)||[])[1]||'General error';errMap[k]=(errMap[k]||0)+1});d.top_errors=Object.entries(errMap).sort((a,b)=>b[1]-a[1]).slice(0,10);let traceMap={};_allRows.forEach(r=>{let t=r.trace||r.event;if(t){traceMap[t]??={trace:t,count:0,errors:0,latency:0,app:r.app};traceMap[t].count++;traceMap[t].errors+=r.level==='ERROR'||r.level==='FAILURE'?1:0;traceMap[t].latency=Math.max(traceMap[t].latency,Number(r.latency||0))}});d.hot_traces=Object.values(traceMap).sort((a,b)=>(b.errors-a.errors)||(b.latency-a.latency)||(b.count-a.count)).slice(0,8);let appMap={};_allRows.forEach(r=>{let a=r.app||'unknown';appMap[a]??={app:a,lines:0,errors:0,warns:0,latencies:[]};appMap[a].lines++;appMap[a].errors+=r.level==='ERROR'||r.level==='FAILURE'?1:0;appMap[a].warns+=r.level==='WARN'?1:0;if(r.latency)appMap[a].latencies.push(r.latency)});d.app_health=Object.values(appMap).map(a=>({...a,avg_latency:a.latencies.length?Math.round(a.latencies.reduce((x,y)=>x+y,0)/a.latencies.length):0,severity:a.errors?'critical':a.warns?'warn':'ok'})).sort((a,b)=>b.errors-a.errors||b.lines-a.lines);let tb={};_allRows.forEach(r=>{let k=String(r.time||'').slice(0,16);if(k){tb[k]??={time:k,total:0,errors:0,warns:0};tb[k].total++;tb[k].errors+=r.level==='ERROR'||r.level==='FAILURE'?1:0;tb[k].warns+=r.level==='WARN'?1:0}});d.timeline_buckets=Object.values(tb).sort((a,b)=>a.time.localeCompare(b.time)).slice(-40);d.root_cause=d.top_errors[0]?`Most repeated error cluster is '${d.top_errors[0][0]}' with ${d.top_errors[0][1]} hits`:(d.total?'No strong failure pattern detected in active dataset':'Upload logs to generate an incident summary.');d.deploy_summary={recommendation:d.errors?'Block release until critical errors are explained.':'Safe to continue with monitoring.'};d.action_cards=[{title:'Investigate trace',value:d.hot_traces[0]?.trace||'No trace yet',type:d.errors?'critical':'ok'},{title:'Top app',value:d.app_health[0]?.app||'Unknown',type:d.app_health[0]?.severity||'warn'},{title:'Review dependency',value:d.dependencies[0]||'No dependency signal',type:d.dependencies.length?'warn':'ok'},{title:'Deploy readiness',value:`Health ${Math.round(d.health_score)}/100`,type:d.health_score<70?'critical':d.health_score<90?'warn':'ok'}];let successCount=_allRows.filter(r=>String(r.level||'').toUpperCase()==='SUCCESS'||/\b(success|status\":\s*\"success|httpstatus\":\s*2\d\d)\b/i.test(r.message||'')).length;let uniqueTraces=new Set(_allRows.map(r=>r.trace||r.event).filter(Boolean));let apiSet=new Set(_allRows.map(r=>r.flow||r.api||'').filter(Boolean));let times=_allRows.map(r=>Date.parse(String(r.time||'').replace(' ', 'T'))).filter(x=>!isNaN(x));let minutes=times.length?Math.max(1,Math.ceil((Math.max(...times)-Math.min(...times))/60000)):1;let sortedLat=_allRows.map(r=>Number(r.latency||0)).filter(Boolean).sort((a,b)=>a-b);let p95=sortedLat.length?sortedLat[Math.min(sortedLat.length-1,Math.floor(sortedLat.length*.95))]:0;d.derived_metrics={error_rate:d.total?Math.round((d.errors/d.total)*1000)/10:0,success_rate:d.total?Math.round((successCount/d.total)*1000)/10:0,throughput:Math.round(d.total/minutes),traces:uniqueTraces.size,apis:apiSet.size,p95:p95,sources:_sessions.length,anomaly:(d.total && (d.errors/d.total>.05||p95>5000))?'High':'Normal'};d.findings=[{label:`Active files: ${_sessions.length}`,type:'info'},{label:`${d.errors} error(s), ${d.warns} warning(s)`,type:d.errors?'error':d.warns?'warn':'ok'},{label:`Applications detected: ${d.apps.join(', ')||'none'}`,type:d.apps.length?'ok':'warn'},{label:`Avg latency ${d.latency}ms · P95 ${p95}ms`,type:d.latency>3000?'warn':'info'}];_lastResult=d;renderResult(d);renderUploads();renderRows(_visibleRows);updateFilters();renderFlow();generateReport()}
@@ -352,7 +396,7 @@ async function createAlert(){let name=document.getElementById('alert-env').value
   document.getElementById('history-status').textContent=rows.length?`${rows.length} session(s) stored in Postgres`:'';
 }
 async function reloadSession(sessionId,filename){
-  let statusEl=document.getElementById('history-status');
+  let statusEl=document.getElementById('history-status')||document.getElementById('upload-status')||{textContent:''};
   statusEl.textContent='⏳ Reloading session…';
   try{
     let r=await fetch('/api/v1/sessions/'+sessionId+'/rows');

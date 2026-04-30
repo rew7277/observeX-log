@@ -1728,29 +1728,39 @@ def extract_system_map(rows: list, raw: str, env: str, session_id: int, user_id:
         for r in api_rows:
             msg = r.get('message', '') or ''
             ep = ''
+            route_method = ''
 
-            # Try structured URI extraction first
-            for pat in uri_patterns:
-                m = re.search(pat, msg, re.I | re.S)
-                if m:
-                    candidate = _normalise_endpoint(m.group(1))
-                    # Only accept if it looks like a real REST path (has at least one segment)
-                    if candidate and candidate != '/' and len(candidate) > 1:
-                        ep = candidate
-                        break
+            # V6: Mule runtime route is the most reliable endpoint signal.
+            try:
+                _a, route_method, route_ep = _extract_mule_route_from_text(msg)
+                if route_ep and route_ep != '/':
+                    ep = route_ep
+                    if route_method:
+                        r['method'] = route_method
+                        r['endpoint'] = route_ep
+            except Exception:
+                pass
 
-            # Do NOT fall back to r.get('flow') — that's a MuleSoft flow name, not an HTTP path
-            # Instead, use the api endpoint passed in context if available
+            if not ep:
+                for pat in uri_patterns:
+                    m = re.search(pat, msg, re.I | re.S)
+                    if m:
+                        candidate = _normalise_endpoint(m.group(1))
+                        if candidate and candidate != '/' and len(candidate) > 1:
+                            ep = candidate
+                            break
+
             if not ep:
                 ep = '/'
 
-            endpoint_groups.setdefault(ep, []).append(r)
+            method_key = (r.get('method') or route_method or '').upper()
+            endpoint_groups.setdefault((method_key, ep), []).append(r)
 
-        for endpoint, ep_rows in endpoint_groups.items():
-            method = ''
+        for endpoint_key, ep_rows in endpoint_groups.items():
+            method, endpoint = endpoint_key if isinstance(endpoint_key, tuple) else ('', endpoint_key)
             for r in ep_rows[:50]:
                 mm = method_pattern.search(r.get('message', '') or '')
-                if mm:
+                if mm and not method:
                     method = mm.group(1).upper()
                     break
 
@@ -2314,13 +2324,13 @@ def extract_architecture_graph(rows: list, raw: str, env: str, session_id: int, 
 # Overrides the older V40 topology functions with the uploaded v2 engine.
 # Existing call sites continue using extract_architecture_graph(...) normally.
 try:
-    from topology_engine_v2 import (
+    from topology_engine_v3 import (
         extract_architecture_graph,
         _build_clean_execution_flow,
         _extract_flow_steps_from_mule_rows,
     )
 except Exception as _topology_v2_error:
-    app.logger.exception("Topology Engine v2 import failed; falling back to bundled V40 engine")
+    app.logger.exception("Topology Engine v3 import failed; falling back to bundled V40 engine")
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
 @app.route("/")
