@@ -1,4 +1,6 @@
-import os, re, json, hashlib, secrets, datetime, threading, time
+import os, re, json, hashlib, secrets, datetime, threading, time, warnings
+# Silence authlib joserfc migration warning — cosmetic only, functionality unaffected
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="authlib")
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, jsonify, flash, make_response, abort, Response
