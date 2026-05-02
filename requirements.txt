@@ -1,13 +1,41 @@
-Flask==3.1.0
-Flask-SQLAlchemy==3.1.1
-Flask-Mail==0.10.0
-Werkzeug==3.1.3
-gunicorn==23.0.0
-psycopg2-binary==2.9.10
-SQLAlchemy==2.0.36
-Authlib>=1.3.2
+# ObserveX requirements.txt
+# Run: pip install -r requirements.txt
+
+# ── Core framework ────────────────────────────────────────────────────────────
+flask>=3.0.3
+flask-sqlalchemy>=3.1.1
+flask-mail>=0.10.0
+flask-migrate>=4.0.7          # NEW — replaces ensure_runtime_columns / db.create_all patches
+gunicorn>=22.0.0
+
+# ── Database drivers ──────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.9        # PostgreSQL (Railway)
+alembic>=1.13.2               # Used by Flask-Migrate
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+authlib>=1.3.1
 requests>=2.32.0
-redis>=5.2.0
-rq>=2.1.0
-cryptography>=43.0.0
-Flask-Migrate>=4.0.7
+
+# ── Security ──────────────────────────────────────────────────────────────────
+cryptography>=42.0.8          # NEW — Fernet encryption for connector secrets
+python-magic>=0.4.27          # NEW — MIME-type file validation (needs libmagic on OS)
+                              # On Railway: add `libmagic1` to nixpacks packages
+
+# ── Task queue (pick one — both are listed so the installer is flexible) ──────
+# Option A: RQ (simpler, recommended for Railway)
+rq>=1.16.3
+redis>=5.0.7
+
+# Option B: Celery (richer retry/routing; use with Redis broker)
+# celery[redis]>=5.4.0
+
+# ── MongoDB (optional — for audit event dual-write and metadata at scale) ─────
+# pymongo>=4.7.3
+
+# ── Observability ─────────────────────────────────────────────────────────────
+werkzeug>=3.0.3
+
+# ── Dev / testing ──────────────────────────────────────────────────────────────
+# pytest>=8.2.2
+# pytest-flask>=1.3.0
+# factory-boy>=3.3.0
