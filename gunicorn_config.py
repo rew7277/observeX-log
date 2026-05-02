@@ -1,11 +1,11 @@
 """
-gunicorn_config.py — ObserveX production gunicorn settings.
-
-SSL POOL FIX: wrap dispose() in app.app_context() so Flask-SQLAlchemy
-can reach db.engine. This works because --preload already imported the
-app module in the parent before forking.
+gunicorn_config.py — ObserveX production gunicorn settings v3.
 """
-import os
+import os, warnings
+
+# Suppress authlib deprecation at module level (runs in master + each worker)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="authlib")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::DeprecationWarning:authlib")
 
 port    = os.environ.get("PORT", "8080")
 bind    = f"0.0.0.0:{port}"
@@ -20,12 +20,7 @@ errorlog  = "-"
 loglevel  = "info"
 
 def post_fork(server, worker):
-    """
-    Dispose the inherited connection pool in each worker after fork.
-    Must use app.app_context() because db.engine is Flask-SQLAlchemy
-    and requires an active application context to resolve the engine.
-    close=False: leaves parent-process connections untouched.
-    """
+    """Dispose inherited SSL connection pool in each forked worker."""
     try:
         import app as _app_module
         with _app_module.app.app_context():

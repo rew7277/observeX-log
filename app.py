@@ -1,5 +1,11 @@
 import os, re, json, hashlib, secrets, datetime, threading, time, warnings
-# Silence authlib joserfc migration warning — cosmetic only, functionality unaffected
+# Silence authlib joserfc migration warning at OS level (fires before Python-level filter)
+# Must use PYTHONWARNINGS env var so it applies in forked worker processes too
+import os as _os
+_existing = _os.environ.get("PYTHONWARNINGS", "")
+_suppress = "ignore::DeprecationWarning:authlib"
+if _suppress not in _existing:
+    _os.environ["PYTHONWARNINGS"] = (_existing + "," + _suppress).lstrip(",")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="authlib")
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -23,10 +29,21 @@ app = Flask(__name__)
 @app.after_request
 def apply_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; "
+            "img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; "
+            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+            "connect-src 'self' blob:; "
+            "worker-src 'self' blob:; "
+            "frame-ancestors 'self';"
+        ),
+    )
     return response
 
 # Rate limiting: Redis in production, safe in-memory fallback for local dev.
