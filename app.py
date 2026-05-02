@@ -1,4 +1,4 @@
-import os, re, json, hashlib, secrets, datetime, threading, time, warnings
+import os, re, json, hashlib, secrets, datetime, threading, time, warnings, uuid
 # Silence authlib joserfc migration warning.
 # AuthlibDeprecationWarning is NOT a plain DeprecationWarning — filtering by base class or
 # PYTHONWARNINGS="ignore::DeprecationWarning:authlib" does NOT suppress it.
@@ -2862,6 +2862,40 @@ def analyse():
         raw_parts = []
         fname = "paste"
         fnames = []
+        user = get_current_user()
+        if user is None:
+            return jsonify({"error": "Session expired. Please login again."}), 401
+
+        # V46.3 ZERO-COPY LARGE UPLOAD PATH
+        # Do NOT f.read().decode() large multipart uploads inside the request.
+        # Werkzeug already streamed the upload to a temporary file; saving that stream
+        # and queuing a path avoids huge RAM copies, Redis payloads, and sync parsing.
+        async_threshold = int(os.environ.get("OBSERVEX_ASYNC_UPLOAD_BYTES", str(256 * 1024)))
+        force_async = str(request.form.get("async", "")).lower() in ("1", "true", "yes")
+        content_len = int(request.content_length or 0)
+        if "logfile" in request.files and (force_async or content_len >= async_threshold):
+            files = [f for f in request.files.getlist("logfile") if f and f.filename]
+            if not files:
+                return jsonify({"error": "No log content provided"}), 400
+            jobs = []
+            for f in files:
+                if not allowed_file(f.filename):
+                    return jsonify({"error": f"Unsupported file type: {f.filename}. Upload .log, .txt or .json only."}), 400
+                safe = secure_filename(f.filename)
+                path = _large_upload_path(user.id, safe)
+                f.save(path)
+                jobs.append(queue_ingestion_file_path(user, path, query, env, safe))
+            primary = jobs[0]
+            return jsonify({
+                "queued": True,
+                "job_id": primary.id,
+                "job_ids": [j.id for j in jobs],
+                "status": primary.status,
+                "filename": ", ".join([j.filename for j in jobs[:6]]) + ("..." if len(jobs) > 6 else ""),
+                "message": "Upload accepted immediately. Parsing/indexing are running in the background from disk.",
+                "poll_url": f"/ingestion-jobs/{primary.id}",
+                "fast_upload_path": True
+            }), 202
 
         if "logfile" in request.files:
             files = request.files.getlist("logfile")
@@ -2884,12 +2918,6 @@ def analyse():
         if not raw:
             return jsonify({"error": "No log content provided"}), 400
 
-        user = get_current_user()
-        if user is None:
-            return jsonify({"error": "Session expired. Please login again."}), 401
-
-        async_threshold = int(os.environ.get("OBSERVEX_ASYNC_UPLOAD_BYTES", str(512 * 1024)))  # 512KB: anything larger → background job
-        force_async = str(request.form.get("async", "")).lower() in ("1", "true", "yes")
         if force_async or len(raw.encode("utf-8", errors="ignore")) >= async_threshold or len(fnames) > 1:
             job = queue_ingestion_payload(user, raw, query, env, fname)
             return jsonify({"queued": True, "job_id": job.id, "status": job.status, "filename": fname, "message": "Upload accepted. Parsing and indexing are running in the background.", "poll_url": f"/ingestion-jobs/{job.id}"}), 202
@@ -3034,6 +3062,106 @@ def _apply_fast_full_counts(result: dict, counters: dict):
         result["warn_rate"] = round(result["warns"] / result["total"] * 100, 2)
     return result
 
+
+def _large_upload_path(user_id: int, filename: str) -> str:
+    safe_name = secure_filename(filename or "upload.log")[:100]
+    root = os.path.join(UPLOAD_DIR, "_incoming", str(user_id))
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, f"{int(time.time())}-{uuid.uuid4().hex[:10]}-{safe_name}")
+
+
+def _stream_large_file_counters_and_sample(path: str):
+    """Read only bounded sample into memory; count full file with cheap binary scans.
+
+    This avoids the previous 50MB unicode decode + Redis serialization + regex parse path.
+    """
+    head_bytes = int(os.environ.get("OBSERVEX_FAST_HEAD_BYTES", str(512 * 1024)))
+    tail_bytes = int(os.environ.get("OBSERVEX_FAST_TAIL_BYTES", str(512 * 1024)))
+    chunk_size = int(os.environ.get("OBSERVEX_COUNT_CHUNK_BYTES", str(1024 * 1024)))
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    with open(path, "rb") as fh:
+        head = fh.read(max(0, head_bytes))
+        if tail_bytes > 0 and size > head_bytes:
+            fh.seek(max(0, size - tail_bytes))
+            tail = fh.read(tail_bytes)
+        else:
+            tail = b""
+    total_lines = 0; err_count = 0; warn_count = 0
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(chunk_size)
+            if not chunk:
+                break
+            low = chunk.lower()
+            total_lines += chunk.count(b"\n")
+            err_count += low.count(b" error ") + low.count(b"level=error") + low.count(b'"level":"error"') + low.count(b'"level": "error"') + low.count(b"exception") + low.count(b" failure ")
+            warn_count += low.count(b" warn ") + low.count(b"level=warn") + low.count(b'"level":"warn"') + low.count(b'"level": "warn"')
+    if size:
+        total_lines += 1
+    sample_bytes = head + b"\n\n--- OBSERVEX FAST SAMPLE: middle of large file skipped for speed ---\n\n" + tail
+    sample = sample_bytes.decode("utf-8", errors="replace")
+    return {"sample": sample, "is_large": True, "bytes": size, "total_lines": total_lines, "error_count": int(err_count), "warn_count": int(warn_count)}
+
+
+def queue_ingestion_file_path(user, path, query, env, filename, source="file-upload"):
+    total_bytes = os.path.getsize(path) if os.path.exists(path) else 0
+    job = IngestionJob(user_id=user.id, source=source, filename=filename, status="queued", total_bytes=total_bytes)
+    db.session.add(job); db.session.commit()
+    if _RQ_QUEUE is not None:
+        try:
+            _RQ_QUEUE.enqueue("app.run_ingestion_file_job", job.id, user.id, path, query, env, filename, job_timeout=int(os.environ.get("OBSERVEX_JOB_TIMEOUT", "1800")))
+        except Exception:
+            app.logger.exception("RQ enqueue failed; falling back to in-process file thread")
+            threading.Thread(target=run_ingestion_file_job, args=(job.id, user.id, path, query, env, filename), daemon=True).start()
+    else:
+        threading.Thread(target=run_ingestion_file_job, args=(job.id, user.id, path, query, env, filename), daemon=True).start()
+    try:
+        audit_event(user, "ingestion.queued.file", filename, {"job_id": job.id, "environment": env, "bytes": total_bytes, "queue": "rq" if _RQ_QUEUE is not None else "thread-fallback"}); db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return job
+
+
+def run_ingestion_file_job(job_id, user_id, path, query, env, filename):
+    with app.app_context():
+        job = db.session.get(IngestionJob, job_id)
+        if not job:
+            return
+        try:
+            job.status = "running"; job.progress = 5; job.started_at = datetime.datetime.utcnow(); db.session.commit()
+            counters = _stream_large_file_counters_and_sample(path)
+            raw_sample = counters["sample"]
+            job.progress = 20; db.session.commit()
+            result = analyse_log_text(raw_sample, query, env, filename, user_id)
+            result = _apply_fast_full_counts(result, counters)
+            rows_to_store = (result.get("log_rows") or [])[:1000]
+            result_summary = {k: v for k, v in result.items() if k != "log_rows"}
+            ls = LogSession(user_id=user_id, environment=env, filename=filename,
+                            total_lines=result.get("total", 0), error_count=result.get("errors", 0),
+                            warn_count=result.get("warns", 0), avg_latency=result.get("latency", 0),
+                            apps_found=",".join(result.get("apps") or []),
+                            log_rows_json=json.dumps(rows_to_store[:250], default=str),
+                            result_json=json.dumps(result_summary, default=str))
+            db.session.add(ls); db.session.flush()
+            job.session_id = ls.id; job.total_lines = result.get("total", 0); job.progress = 60; db.session.commit()
+            flow_maps = extract_system_map(rows_to_store, raw_sample, env, ls.id, user_id)
+            for fm in flow_maps:
+                db.session.add(fm)
+            persist_observability_indexes(user_id, ls.id, rows_to_store, raw_sample, env, filename, flow_maps)
+            maybe_create_incident_from_rows(user_id, rows_to_store, env, ls.id)
+            job.status = "success"; job.progress = 100; job.finished_at = datetime.datetime.utcnow(); db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            job = db.session.get(IngestionJob, job_id)
+            if job:
+                job.status = "failed"; job.error = str(exc)[:4000]; job.progress = 100; job.finished_at = datetime.datetime.utcnow(); db.session.commit()
+        finally:
+            if os.environ.get("OBSERVEX_KEEP_INCOMING_UPLOADS", "0").lower() not in ("1", "true", "yes"):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
 # ── Optional async ingestion for very large uploads ───────────────────────────
 def run_ingestion_job(job_id, user_id, raw, query, env, filename):
     with app.app_context():
@@ -3091,7 +3219,10 @@ def analyse_async():
             if not allowed_file(f.filename):
                 return jsonify({"error":"Unsupported file type"}), 400
             fname = secure_filename(f.filename)
-            raw = f.read().decode("utf-8", errors="replace")
+            path = _large_upload_path(user.id, fname)
+            f.save(path)
+            job = queue_ingestion_file_path(user, path, query, env, fname)
+            return jsonify({"queued": True, "job_id": job.id, "status": job.status, "filename": fname, "poll_url": f"/ingestion-jobs/{job.id}", "fast_upload_path": True}), 202
     if not raw:
         return jsonify({"error":"No log content provided"}), 400
     job = queue_ingestion_payload(user, raw, query, env, fname)
