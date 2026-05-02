@@ -16,15 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 
-# FIX: Do NOT hardcode PORT — Railway injects it at runtime via env var.
-# Removing "ENV PORT=5000" ensures $PORT is always Railway's value (8080 in Docker mode).
+# FIX: No hardcoded PORT — Railway injects PORT=8080 at runtime
 EXPOSE 8080
 
-# Use shell form so $PORT is expanded at runtime from Railway's injected env
-CMD gunicorn app:app \
-        --bind 0.0.0.0:${PORT:-8080} \
-        --workers ${WEB_CONCURRENCY:-2} \
-        --timeout 120 \
-        --preload \
-        --access-logfile - \
-        --error-logfile -
+# Use gunicorn_config.py for all settings (includes post_fork SSL fix)
+CMD ["gunicorn", "app:app", "--config", "gunicorn_config.py"]

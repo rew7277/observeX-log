@@ -1101,7 +1101,7 @@ setTimeout(loadMaskingSettings,800);
 setInterval(refreshEnterprisePanels,15000);
 setTimeout(refreshEnterprisePanels,800);
 
-setTimeout(()=>showSection('{{ active_section|default('dashboard') }}'),0);
+setTimeout(()=>showSection("{{ active_section|default('dashboard') }}"),0);
 
 /* ── AUTO-LOAD LAST SESSION FROM DB (no localStorage) ────────────────── */
 async function autoLoadLastSession(){

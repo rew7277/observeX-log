@@ -84,6 +84,22 @@ if not (os.environ.get("DATABASE_URL") or "").strip():
 
 app.config["SQLALCHEMY_DATABASE_URI"] = resolve_database_url()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# V12 SSL FIX: pre_ping validates connections before use (catches stale SSL sockets).
+# pool_recycle closes connections before Railway's 5-min idle timeout kills them.
+# NullPool is used when SQLALCHEMY_NULLPOOL=1 (e.g. for pgbouncer/transaction mode).
+_use_nullpool = os.environ.get("SQLALCHEMY_NULLPOOL", "").lower() in ("1", "true", "yes")
+if _use_nullpool:
+    from sqlalchemy.pool import NullPool
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"poolclass": NullPool}
+else:
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,        # validates SSL connection before each use
+        "pool_recycle":  280,         # recycle before Railway's 300s idle timeout
+        "pool_size":     2,           # 2 workers × 2 = 4 total Postgres connections
+        "max_overflow":  4,
+        "pool_timeout":  30,
+        "connect_args":  {"connect_timeout": 10},
+    }
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024  # default 500 MB
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -703,14 +719,33 @@ def internal_error(error):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_current_user():
-    """Return the logged-in user or clear a stale/invalid session."""
+    """Return the logged-in user, with automatic retry on stale SSL connections."""
     uid = session.get("user_id")
     if not uid:
         return None
-    user = db.session.get(User, uid)
-    if user is None:
-        session.clear()
-    return user
+    # V12: retry once on SSL/connection errors (happens after worker fork or idle timeout)
+    for attempt in range(2):
+        try:
+            user = db.session.get(User, uid)
+            if user is None:
+                session.clear()
+            return user
+        except Exception as exc:
+            err = str(exc).lower()
+            if attempt == 0 and any(kw in err for kw in (
+                "ssl", "eof", "decryption", "bad record", "connection", "operational"
+            )):
+                # Dispose the pool so next attempt gets a fresh connection
+                db.session.rollback()
+                try:
+                    db.engine.dispose()
+                except Exception:
+                    pass
+                continue
+            # Second attempt or unrecognised error — re-raise
+            db.session.rollback()
+            raise
+    return None
 
 DEFAULT_ENVIRONMENTS = ["PROD", "UAT", "SIT", "DEV", "PREPROD", "DR"]
 
