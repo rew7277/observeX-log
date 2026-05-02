@@ -2976,6 +2976,64 @@ def analyse():
         app.logger.exception("Log analysis failed")
         return jsonify({"error": f"Log analysis failed: {str(exc)}"}), 500
 
+
+# ── Fast large-file ingestion helpers ────────────────────────────────────────
+def _fast_large_log_sample(raw: str):
+    """Return a bounded head+tail sample plus cheap full-file counters.
+
+    The old worker parsed and ran topology over large raw logs, which makes 50MB
+    uploads feel like minutes. This keeps intelligence accurate enough for UI by
+    analysing representative head/tail content while counting full-file totals
+    with O(n) string scans.
+    """
+    raw = str(raw or "")
+    head_bytes = int(os.environ.get("OBSERVEX_FAST_HEAD_BYTES", str(2 * 1024 * 1024)))
+    tail_bytes = int(os.environ.get("OBSERVEX_FAST_TAIL_BYTES", str(1 * 1024 * 1024)))
+    large_threshold = int(os.environ.get("OBSERVEX_LARGE_FILE_BYTES", str(8 * 1024 * 1024)))
+    byte_len = len(raw.encode("utf-8", errors="ignore"))
+    is_large = byte_len >= large_threshold
+    if not is_large:
+        sample = raw
+    else:
+        head = raw[:head_bytes]
+        tail = raw[-tail_bytes:] if tail_bytes > 0 else ""
+        sample = head + "\n\n--- OBSERVEX FAST SAMPLE: middle of large file skipped for speed ---\n\n" + tail
+    low = raw.lower()
+    total_lines = raw.count("\n") + (1 if raw else 0)
+    # Cheap broad counters; detailed clustering still comes from the sample.
+    err_count = (
+        low.count(" error ") + low.count("level=error") + low.count('"level":"error"') +
+        low.count('"level": "error"') + low.count("exception") + low.count(" failure ")
+    )
+    warn_count = low.count(" warn ") + low.count("level=warn") + low.count('"level":"warn"') + low.count('"level": "warn"')
+    return {
+        "sample": sample,
+        "is_large": is_large,
+        "bytes": byte_len,
+        "total_lines": total_lines,
+        "error_count": int(err_count),
+        "warn_count": int(warn_count),
+    }
+
+def _apply_fast_full_counts(result: dict, counters: dict):
+    if not counters.get("is_large"):
+        return result
+    result = dict(result or {})
+    full_total = int(counters.get("total_lines") or result.get("total") or 0)
+    full_errors = int(counters.get("error_count") or result.get("errors") or 0)
+    full_warns = int(counters.get("warn_count") or result.get("warns") or 0)
+    result["sampled"] = True
+    result["sample_note"] = "Large file fast mode: UI intelligence uses head/tail sample; totals use full-file counters."
+    result["total"] = max(full_total, int(result.get("total") or 0))
+    result["original_total"] = result["total"]
+    result["physical_lines"] = result["total"]
+    result["errors"] = max(full_errors, int(result.get("errors") or 0))
+    result["warns"] = max(full_warns, int(result.get("warns") or 0))
+    if result["total"]:
+        result["error_rate"] = round(result["errors"] / result["total"] * 100, 2)
+        result["warn_rate"] = round(result["warns"] / result["total"] * 100, 2)
+    return result
+
 # ── Optional async ingestion for very large uploads ───────────────────────────
 def run_ingestion_job(job_id, user_id, raw, query, env, filename):
     with app.app_context():
@@ -2984,24 +3042,13 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
             return
         try:
             job.status = "running"; job.progress = 10; job.started_at = datetime.datetime.utcnow(); db.session.commit()
-            # V12 SPEED FIX: For very large files (>10MB), analyse the first 10MB for
-            # topology/RCA intelligence and count remaining lines separately.
-            # This cuts 60MB parse time from 10min → <30s.
-            RAW_ANALYSE_LIMIT = int(os.environ.get("OBSERVEX_PARSE_LIMIT_BYTES", str(10 * 1024 * 1024)))
-            raw_sample = raw[:RAW_ANALYSE_LIMIT]
-            extra_lines = 0
-            extra_errors = 0
-            if len(raw) > RAW_ANALYSE_LIMIT:
-                # Count lines and errors in the overflow section cheaply
-                overflow = raw[RAW_ANALYSE_LIMIT:]
-                extra_lines = overflow.count('\n')
-                extra_errors = overflow.lower().count('level=error') + overflow.count('"level":"error"') + overflow.count(' ERROR ')
-                job.progress = 15; db.session.commit()
+            # V46.2 FAST INGESTION: never run expensive topology/RCA over the full raw file.
+            # Full-file totals are counted with cheap scans; intelligence uses a bounded head+tail sample.
+            counters = _fast_large_log_sample(raw)
+            raw_sample = counters["sample"]
+            job.progress = 15; db.session.commit()
             result = analyse_log_text(raw_sample, query, env, filename, user_id)
-            # Merge overflow counts into result
-            if extra_lines:
-                result['total'] = result.get('total', 0) + extra_lines
-                result['errors'] = result.get('errors', 0) + extra_errors
+            result = _apply_fast_full_counts(result, counters)
             job.progress = 45; db.session.commit()
             rows_to_store = result.get("log_rows", [])[:5000]
             result_summary = {k: v for k, v in result.items() if k != "log_rows"}
@@ -3013,13 +3060,15 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
                             result_json=json.dumps(result_summary, default=str))
             db.session.add(ls); db.session.flush()
             job.session_id = ls.id; job.total_lines = result.get("total", 0); job.progress = 60; db.session.commit()
-            flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user_id)
+            flow_maps = extract_system_map(rows_to_store, raw_sample, env, ls.id, user_id)
             for fm in flow_maps:
                 db.session.add(fm)
-            persist_observability_indexes(user_id, ls.id, rows_to_store, raw, env, filename, flow_maps)
+            persist_observability_indexes(user_id, ls.id, rows_to_store, raw_sample, env, filename, flow_maps)
             job.progress = 85; db.session.commit()
             maybe_create_incident_from_rows(user_id, rows_to_store, env, ls.id)
-            persist_raw_upload(user_id, ls.id, filename, raw)
+            
+            if (not counters.get("is_large")) or os.environ.get("OBSERVEX_STORE_LARGE_RAW", "0").lower() in ("1", "true", "yes"):
+                persist_raw_upload(user_id, ls.id, filename, raw)
             job.status = "success"; job.total_lines = result.get("total", 0); job.session_id = ls.id; job.progress = 100; job.finished_at = datetime.datetime.utcnow()
             db.session.commit()
         except Exception as exc:
