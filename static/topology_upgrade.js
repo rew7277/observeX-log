@@ -1124,3 +1124,42 @@ function useSelectedTopology(){
 
     console.log('[ObserveX] V6.2 parallel upload + topology flow-fix loaded ✓');
 })();
+
+
+// V46.5 reliable upload override: never leave dashboard waiting for a missing RQ worker.
+// Large files are still fast because /analyse performs bounded head/tail sampling server-side.
+(function(){
+  function $(id){return document.getElementById(id)}
+  async function safeJson(resp){
+    const txt=await resp.text(); let data={};
+    try{ data=txt?JSON.parse(txt):{}; }catch(e){ throw new Error('Server returned non-JSON response: '+txt.slice(0,180)); }
+    if(!resp.ok || data.error) throw new Error(data.error || ('HTTP '+resp.status));
+    return data;
+  }
+  window.uploadFiles = async function uploadFiles(files){
+    files=[...(files||[])]; if(!files.length) return;
+    const status=$('upload-status'); const bar=$('upload-progress');
+    const total=files.reduce((a,f)=>a+(f.size||0),0)||1; let done=0;
+    for(const file of files){
+      const fd=new FormData();
+      const envEl=$('env'); fd.append('env', envEl?envEl.value:'PROD'); fd.append('logfile', file);
+      try{
+        if(status) status.textContent='Uploading and ingesting '+file.name+'…';
+        const d=await safeJson(await fetch('/analyse',{method:'POST',body:fd}));
+        if(d.queued && d.job_id && typeof pollIngestionJob==='function'){
+          if(status) status.textContent='Processing '+file.name+'…';
+          await pollIngestionJob(d.job_id, 'q'+d.job_id, file.name);
+        }else if(typeof addSession==='function'){
+          addSession(d,file.name,file.size);
+          if(status) status.textContent='✅ '+file.name+' ingested · '+Number(d.total||0).toLocaleString()+' lines · '+Number((d.log_rows||[]).length).toLocaleString()+' rows visible';
+        }
+        if(typeof loadSystemMap==='function') loadSystemMap().catch(()=>{});
+      }catch(e){
+        console.error(e); alert(file.name+': '+e.message);
+        if(status) status.textContent='❌ Upload failed: '+e.message;
+      }
+      done+=file.size||0; if(bar) bar.style.width=Math.round(done/total*100)+'%';
+    }
+    if(status) status.textContent='Upload complete. Active dataset contains '+((_allRows||[]).length||0).toLocaleString()+' parsed log record(s).';
+  };
+})();

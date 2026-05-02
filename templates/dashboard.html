@@ -244,7 +244,7 @@ function uploadFiles(files){
     fd.append('env',document.getElementById('env').value);
     fd.append('logfile',file);
     setStatus('Uploading '+file.name+'… 0%');setBar(0);
-    const endpoint=file.size>=LARGE?'/analyse/async':'/analyse';
+    const endpoint='/analyse';
     const xhr=new XMLHttpRequest();
     xhr.upload.addEventListener('progress',e=>{
       if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);setBar(p);setStatus('Uploading '+file.name+'… '+p+'% ('+Math.round(e.loaded/1024)+'KB / '+Math.round(e.total/1024)+'KB)');}
@@ -253,7 +253,7 @@ function uploadFiles(files){
       setBar(file.size>=LARGE?15:100);
       try{
         const d=JSON.parse(xhr.responseText);
-        if(d.queued&&d.job_id){setStatus('⚙ Indexing '+file.name+' in background… dashboard will update when ready.');pollJob(d.job_id,file.name,nextFile);}
+        if(d.queued&&d.job_id){setStatus('⚙ Indexing '+file.name+' in background…');pollJob(d.job_id,file.name,nextFile);}
         else if(d.error){alert(file.name+': '+d.error);nextFile();}
         else{
           setStatus('✅ '+file.name+' loaded · '+(d.total||0).toLocaleString()+' rows · '+(d.errors||0)+' errors');
