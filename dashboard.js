@@ -68,16 +68,9 @@ function renderVisualDashboard(d){
   let max=Math.max(1,...timeline.map(x=>x.total||0));
   let trend=document.getElementById('dash-trend');
   if(trend){
-    if(!timeline.length){timeline=[];}
-    if(window.Chart && timeline.length){
-      trend.innerHTML='<canvas id="dash-trend-canvas" height="170"></canvas>';
-      const ctx=document.getElementById('dash-trend-canvas');
-      if(_dashTrendChart){_dashTrendChart.destroy();}
-      _dashTrendChart=new Chart(ctx,{type:'bar',data:{labels:timeline.map(x=>x.time||''),datasets:[{label:'Traffic',data:timeline.map(x=>x.total||0)},{label:'Errors',data:timeline.map(x=>x.errors||0)},{label:'Warnings',data:timeline.map(x=>x.warns||0)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9898b8'}},tooltip:{mode:'index',intersect:false}},scales:{x:{ticks:{color:'#9898b8',maxRotation:0,autoSkip:true,maxTicksLimit:8},grid:{display:false}},y:{beginAtZero:true,ticks:{color:'#9898b8',precision:0},grid:{color:'rgba(120,120,255,.12)'}}}});
-    }else{
-      if(!timeline.length){timeline=Array.from({length:24},(_,i)=>({total:(i%5)+1,errors:0,warns:i%7===0?1:0,time:''}));max=6}
-      trend.innerHTML=timeline.map((x,i)=>`<div class="trend-bar ${(x.errors||0)>0?'err':(x.warns||0)>0?'warn':''}" title="${esc(x.time||'sample')} · ${x.total||0} logs · ${x.errors||0} errors" style="height:${Math.max(8,Math.round(((x.total||1)/max)*100))}%;animation-delay:${i*12}ms"></div>`).join('');
-    }
+    if(_dashTrendChart && typeof _dashTrendChart.destroy==='function'){try{_dashTrendChart.destroy();}catch(e){console.warn(e)} _dashTrendChart=null;}
+    if(!timeline.length){timeline=Array.from({length:24},(_,i)=>({total:(i%5)+1,errors:0,warns:i%7===0?1:0,time:''}));max=6}
+    trend.innerHTML='<div class="trend-bars" role="img" aria-label="Traffic trend by time">'+timeline.map((x,i)=>`<div class="trend-bar ${(x.errors||0)>0?'err':(x.warns||0)>0?'warn':''}" title="${esc(x.time||'sample')} · ${x.total||0} logs · ${x.errors||0} errors · ${x.warns||0} warnings" style="height:${Math.max(8,Math.round(((x.total||1)/max)*100))}%;animation-delay:${i*12}ms"></div>`).join('')+'</div>';
   }
   let total=Number(d.total||0), errors=Number(d.errors||0), warns=Number(d.warns||0);
   let err=total?Math.max(0,Math.min(100,(errors/total)*100)):0;
