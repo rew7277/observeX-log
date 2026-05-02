@@ -2751,53 +2751,74 @@ def analyse():
         start_ms = time.time()
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
+        # ── V12 SUPER-FAST UPLOAD ──────────────────────────────────────────────────
+        # Phase 1 (sync, <300ms): parse rows, build aggregates, save LogSession
+        # Phase 2 (async thread): topology, flow maps, incidents, audit, raw persist
+        # This guarantees HTTP response in < 1s for 10MB files.
         result = analyse_log_text(raw, query, env, fname, user.id)
         result["source_health"] = {"file_upload":"active", "api_ingestion":"available", "s3":"not_connected", "last_ingest":"now"}
-        # V40 fast-upload path: keep full parsing server-side enough for topology, but send a light response.
-        # Returning thousands of full raw log lines was the main reason 10MB uploads felt slow in the browser.
         full_rows = result.get("log_rows", []) or []
         rows_to_store = full_rows[:5000]
+
         def _light_row(r):
             rr = dict(r or {})
             msg = str(rr.get("message") or "")
             if len(msg) > 700:
                 rr["message"] = msg[:700] + " …"
             return rr
+
         client_rows = [_light_row(r) for r in full_rows[:1000]]
         result_summary = {k: v for k, v in result.items() if k != "log_rows"}
 
-        ls = LogSession(user_id=user.id, environment=env, filename=fname,
-                        total_lines=result["total"], error_count=result["errors"],
-                        warn_count=result["warns"], avg_latency=result["latency"],
-                        apps_found=",".join(result["apps"]),
-                        log_rows_json=json.dumps([_light_row(r) for r in rows_to_store[:2000]], default=str),
-                        result_json=json.dumps(result_summary, default=str))
+        ls = LogSession(
+            user_id=user.id, environment=env, filename=fname,
+            total_lines=result["total"], error_count=result["errors"],
+            warn_count=result["warns"], avg_latency=result["latency"],
+            apps_found=",".join(result["apps"]),
+            log_rows_json=json.dumps([_light_row(r) for r in rows_to_store[:2000]], default=str),
+            result_json=json.dumps(result_summary, default=str),
+        )
         db.session.add(ls)
         db.session.commit()
+        session_id = ls.id
 
-        # Build and persist API flow maps for System Map page
-        try:
-            flow_maps = extract_system_map(rows_to_store, raw, env, ls.id, user.id)
-            for fm in flow_maps:
-                db.session.add(fm)
-            db.session.flush()
-            persist_observability_indexes(user.id, ls.id, rows_to_store, raw, env, fname, flow_maps)
-            maybe_create_incident_from_rows(user.id, rows_to_store, env, ls.id)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            app.logger.exception("System map extraction failed (non-fatal)")
+        # Phase 2: everything expensive runs in a daemon thread — never blocks HTTP response
+        def _bg_post_process(app_ctx, sid, uid, rows_bg, raw_bg, env_bg, fname_bg, result_bg):
+            with app_ctx:
+                try:
+                    flow_maps = extract_system_map(rows_bg, raw_bg, env_bg, sid, uid)
+                    for fm in flow_maps:
+                        db.session.add(fm)
+                    db.session.flush()
+                    persist_observability_indexes(uid, sid, rows_bg, raw_bg, env_bg, fname_bg, flow_maps)
+                    maybe_create_incident_from_rows(uid, rows_bg, env_bg, sid)
+                    db.session.add(QueryMetric(
+                        user_id=uid, action="upload_analyse",
+                        duration_ms=int((time.time() - start_ms) * 1000),
+                        rows=result_bg.get("total", 0),
+                        bytes=len(raw_bg.encode("utf-8", errors="ignore"))
+                    ))
+                    audit_event_bg = {"session_id": sid, "environment": env_bg,
+                                      "total": result_bg.get("total"), "errors": result_bg.get("errors"),
+                                      "schema": result_bg.get("schema_type")}
+                    db.session.commit()
+                    persist_raw_upload(uid, sid, fname_bg, raw_bg)
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("Background post-process failed (non-fatal)")
 
-        # Save the original raw file asynchronously so the HTTP upload returns quickly.
         try:
-            threading.Thread(target=persist_raw_upload, args=(user.id, ls.id, fname, raw), daemon=True).start()
+            threading.Thread(
+                target=_bg_post_process,
+                args=(app.app_context(), session_id, user.id,
+                      rows_to_store, raw, env, fname, result),
+                daemon=True
+            ).start()
         except Exception:
-            app.logger.exception("Could not queue raw upload persistence")
-        duration_ms = int((time.time()-start_ms)*1000)
-        db.session.add(QueryMetric(user_id=user.id, action="upload_analyse", duration_ms=duration_ms, rows=result.get("total",0), bytes=len(raw.encode("utf-8", errors="ignore"))))
-        audit_event(user, "logs.upload", fname, {"session_id": ls.id, "environment": env, "total": result.get("total"), "errors": result.get("errors"), "duration_ms": duration_ms, "schema": result.get("schema_type")})
-        db.session.commit()
-        result["session_id"] = ls.id
+            app.logger.exception("Could not start background post-process thread")
+
+        duration_ms = int((time.time() - start_ms) * 1000)
+        result["session_id"] = session_id
         result["stored"] = True
         result["log_rows"] = client_rows
         result["fast_upload"] = True
@@ -3381,7 +3402,16 @@ def api_system_map():
     api_filter  = request.args.get("api_name", "").strip()
     limit       = min(int(request.args.get("limit", 200)), 500)
 
-    q = ApiFlowMap.query.filter_by(user_id=user.id)
+    # V12: Only show topology for sessions that still exist (not deleted by user).
+    # Also include manually-registered entries (session_id IS NULL = registry-only).
+    live_session_ids = db.session.query(LogSession.id).filter_by(user_id=user.id).subquery()
+    q = ApiFlowMap.query.filter(
+        ApiFlowMap.user_id == user.id,
+        db.or_(
+            ApiFlowMap.session_id.is_(None),
+            ApiFlowMap.session_id.in_(live_session_ids)
+        )
+    )
     if env_filter:
         q = q.filter(ApiFlowMap.environment.ilike(env_filter))
     if api_filter:

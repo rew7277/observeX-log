@@ -199,13 +199,23 @@ function _buildNode(n, p){
 // Ensures Response Exit is ALWAYS the last node — never accidentally first.
 // Call this on any flow array before rendering or building edges.
 function _normalizeFlowOrder(nodes){
-  const cleaned = (nodes||[]).filter(Boolean);
+  let cleaned = (nodes||[]).filter(Boolean);
+  // V12: Response/Client must be LAST — push to end if found elsewhere
   const responseIdx = cleaned.findIndex(n =>
-    /response\s*exit|response\s*out|exit/i.test(String(n||''))
+    /^(response exit|response out|response|client)$/i.test(String(n||'').trim())
   );
   if(responseIdx !== -1 && responseIdx !== cleaned.length - 1){
     const responseNode = cleaned.splice(responseIdx, 1)[0];
     cleaned.push(responseNode);
+  }
+  // V12: Request Entry must be at index 1 (right after the API name node)
+  // If it appears elsewhere, move it to position 1
+  const entryIdx = cleaned.findIndex(n =>
+    /request entry|call.?entry|flow.?start|entry >>/i.test(String(n||''))
+  );
+  if(entryIdx > 1){
+    const entryNode = cleaned.splice(entryIdx, 1)[0];
+    cleaned.splice(1, 0, entryNode);
   }
   return cleaned;
 }
