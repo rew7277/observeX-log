@@ -211,7 +211,7 @@ function uploadFiles(files){
   if(!files.length)return;
   const statusEl=document.getElementById('upload-status');
   const barEl=document.getElementById('upload-progress');
-  const LARGE=5*1024*1024;
+  const LARGE=256*1024; // V12: 256KB+ always uses async endpoint for instant HTTP response
   let idx=0;
   function setStatus(msg){if(statusEl)statusEl.textContent=msg;}
   function setBar(pct){if(barEl)barEl.style.width=pct+'%';}
@@ -1218,5 +1218,4 @@ function useSelectedTopology(){
 
 </script>
 <script src="{{ url_for('static', filename='topology_upgrade.js') }}"></script>
-<script src="{{ url_for('static', filename='ox_viz_v2.js') }}"></script>
 {% endblock %}

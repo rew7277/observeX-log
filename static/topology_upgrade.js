@@ -855,7 +855,7 @@ function useSelectedTopology(){
 
   // Upload one file — returns a promise, enables parallel execution
   async function uploadOneFile(file, env, onProgress, onStatus){
-    const LARGE = 256*1024; // 256KB — always async for files this size or larger
+    const LARGE = 5*1024*1024;
     const fd = new FormData();
     fd.append('env', env);
     fd.append('logfile', file);

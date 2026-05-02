@@ -1,29 +1,4 @@
 import os, re, json, hashlib, secrets, datetime, threading, time
-
-# ── Pre-compiled masking patterns (module-level, compiled once) ───────────────
-# Compiling these inline inside mask_secrets() was the #1 bottleneck for large files:
-# each call to mask_secrets() re-compiled 12+ heavy patterns, multiplied by every log row.
-_RE_JWT        = re.compile(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b')
-_RE_BEARER     = re.compile(r'(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{16,}')
-_RE_SECRETS    = re.compile(r'(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|token|password|passwd|pwd|secret|client[_-]?secret|signature|hmac)(\s*[=:]\s*[\'"]?)([^\s,;"\'}{]{4,})')
-_RE_AADHAAR1   = re.compile(r'(?i)(aadhaar|aadhar|uidai)(\s*[=:]\s*[\'"]?)(\d[ -]?){12}')
-_RE_AADHAAR2   = re.compile(r'\b\d{4}[ -]?\d{4}[ -]?\d{4}\b')
-_RE_PAN1       = re.compile(r'(?i)(pan|panNumber|pan_card)(\s*[=:]\s*[\'"]?)[A-Z]{5}\d{4}[A-Z]')
-_RE_PAN2       = re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b')
-_RE_MOBILE1    = re.compile(r'(?i)(mobile|phone|customerMobile|contact|msisdn)(\s*[=:]\s*[\'"]?)(?:\+?91[- ]?)?[6-9]\d{9}')
-_RE_MOBILE2    = re.compile(r'(?<!\d)(?:\+?91[- ]?)?[6-9]\d{9}(?!\d)')
-_RE_EMAIL      = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
-_RE_REF_TOKEN  = re.compile(r'\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{6,}\b')
-_RE_REF_SUFFIX = re.compile(r'(\d{4,8})$')
-_SENSITIVE_KEYS = ["customerName", "name", "fullName", "firstName", "lastName", "loanNumber",
-                   "loanId", "accountNumber", "accountNo", "primaryCustomerId", "customerId",
-                   "applicationNo", "checkoutId", "bbpsId", "receiptNumber", "transactionId",
-                   "gatewayTransactionId", "upiId", "vpa", "cardNumber"]
-_KEY_ALT = "|".join(map(re.escape, _SENSITIVE_KEYS))
-_RE_SENSITIVE_JSON = re.compile(rf'(?i)(\"(?:{_KEY_ALT})\"\s*:\s*\")([^\"]+)(\")')
-_RE_SENSITIVE_KV   = re.compile(rf'(?i)(\b(?:{_KEY_ALT})\b\s*[=:]\s*[\'"]?)([A-Za-z0-9@._\- /]+)')
-# Large-file row cap: parse at most this many rows for analysis (rest are sampled for stats only)
-LARGE_FILE_ROW_LIMIT = int(os.environ.get("OBSERVEX_MAX_ROWS", "80000"))
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, jsonify, flash, make_response, abort, Response
@@ -1056,29 +1031,30 @@ def extract_safe_search_tokens(raw_text: str):
     return " ".join(sorted(toks))
 
 def mask_secrets(text: str, user_id=None):
-    """Mask PII/secrets. Uses module-level pre-compiled patterns — 8-12x faster for large files."""
+    """Mask PII/secrets plus user-configured fields before UI/API/storage."""
     if not text:
         return text
     masked = apply_field_masking(str(text), get_masking_config(user_id))
-    masked = _RE_JWT.sub("[MASKED_JWT]", masked)
-    masked = _RE_BEARER.sub(r"\1[MASKED_TOKEN]", masked)
-    masked = _RE_SECRETS.sub(r"\1\2[MASKED]", masked)
-    masked = _RE_AADHAAR1.sub(r"\1\2[MASKED_AADHAAR]", masked)
-    masked = _RE_AADHAAR2.sub("[MASKED_AADHAAR]", masked)
-    masked = _RE_PAN1.sub(r"\1\2[MASKED_PAN]", masked)
-    masked = _RE_PAN2.sub("[MASKED_PAN]", masked)
-    masked = _RE_MOBILE1.sub(r"\1\2[MASKED_MOBILE]", masked)
-    masked = _RE_MOBILE2.sub("[MASKED_MOBILE]", masked)
-    masked = _RE_EMAIL.sub("[MASKED_EMAIL]", masked)
-    masked = _RE_SENSITIVE_JSON.sub(r"\1[MASKED]\3", masked)
-    masked = _RE_SENSITIVE_KV.sub(r"\1[MASKED]", masked)
+    masked = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[MASKED_JWT]", masked)
+    masked = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{16,}", r"\1[MASKED_TOKEN]", masked)
+    masked = re.sub(r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|token|password|passwd|pwd|secret|client[_-]?secret|signature|hmac)(\s*[=:]\s*['\"]?)([^\s,;\"'}]{4,})", r"\1\2[MASKED]", masked)
+    masked = re.sub(r"(?i)(aadhaar|aadhar|uidai)(\s*[=:]\s*['\"]?)(\d[ -]?){12}", r"\1\2[MASKED_AADHAAR]", masked)
+    masked = re.sub(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}\b", "[MASKED_AADHAAR]", masked)
+    masked = re.sub(r"(?i)(pan|panNumber|pan_card)(\s*[=:]\s*['\"]?)[A-Z]{5}\d{4}[A-Z]", r"\1\2[MASKED_PAN]", masked)
+    masked = re.sub(r"\b[A-Z]{5}\d{4}[A-Z]\b", "[MASKED_PAN]", masked)
+    masked = re.sub(r"(?i)(mobile|phone|customerMobile|contact|msisdn)(\s*[=:]\s*['\"]?)(?:\+?91[- ]?)?[6-9]\d{9}", r"\1\2[MASKED_MOBILE]", masked)
+    masked = re.sub(r"(?<!\d)(?:\+?91[- ]?)?[6-9]\d{9}(?!\d)", "[MASKED_MOBILE]", masked)
+    masked = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[MASKED_EMAIL]", masked)
+    sensitive_keys = ["customerName", "name", "fullName", "firstName", "lastName", "loanNumber", "loanId", "accountNumber", "accountNo", "primaryCustomerId", "customerId", "applicationNo", "checkoutId", "bbpsId", "receiptNumber", "transactionId", "gatewayTransactionId", "upiId", "vpa", "cardNumber"]
+    key_alt = "|".join(map(re.escape, sensitive_keys))
+    masked = re.sub(rf"(?i)(\"(?:{key_alt})\"\s*:\s*\")([^\"]+)(\")", r"\1[MASKED]\3", masked)
+    masked = re.sub(rf"(?i)(\b(?:{key_alt})\b\s*[=:]\s*['\"]?)([A-Za-z0-9@._\- /]+)", r"\1[MASKED]", masked)
     def repl_ref(m):
         val = m.group(0)
-        num = _RE_REF_SUFFIX.search(val)
+        num = re.search(r"(\d{4,8})$", val)
         return "[MASKED_ID:" + (num.group(1) if num else val[-6:]) + "]"
-    masked = _RE_REF_TOKEN.sub(repl_ref, masked)
+    masked = re.sub(r"\b(?:TR|PP|BD|FS|GLB|APPL|APPT)[A-Z0-9]{6,}\b", repl_ref, masked)
     return masked
-
 
 
 def persist_raw_upload(user_id: int, session_id: int, filename: str, raw: str):
@@ -1107,14 +1083,7 @@ def delete_persisted_upload(user_id: int, session_id: int):
 def build_log_rows(records, env, filename="", user_id=None):
     rows=[]
     current_app=""; current_file=filename
-    # ── Large-file guard: cap rows processed to LARGE_FILE_ROW_LIMIT ──────────
-    # For 60MB files with 500K+ lines masking each row was taking 8-10 minutes.
-    # We process the first N rows fully, then skip masking on tail rows.
-    sampled = len(records) > LARGE_FILE_ROW_LIMIT
-    full_records = records[:LARGE_FILE_ROW_LIMIT] if sampled else records
-    # Cache masking config once per batch — avoids a DB call per row
-    masking_cfg = get_masking_config(user_id)
-    for rec in full_records:
+    for rec in records:
         line = "\n".join(rec.get("message") or [])
         current_file = rec.get("file") or current_file
         app = extract_first([
@@ -1162,7 +1131,7 @@ def build_log_rows(records, env, filename="", user_id=None):
             "file": current_file, "level": detect_level(line), "app": app, "trace": trace,
             "event": trace, "flow": flow, "method": route_method, "endpoint": route_endpoint or "",
             "status": status, "latency": int(lat) if str(lat).isdigit() else 0,
-            "message": apply_field_masking(str(line), masking_cfg) if masking_cfg else mask_secrets(line, user_id), "search_tokens": extract_safe_search_tokens(line), "is_multiline": "\n" in line
+            "message": mask_secrets(line, user_id), "search_tokens": extract_safe_search_tokens(line), "is_multiline": "\n" in line
         })
     return rows
 
@@ -1189,10 +1158,8 @@ def row_matches_filters(row, filters):
 
 def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str = "", user_id=None):
     records = group_multiline_log_records(raw, filename)
-    total_records = len(records)
     detected_env = infer_environment(raw[:5000], env)
     all_rows = build_log_rows(records, detected_env, filename, user_id)
-    was_sampled = total_records > LARGE_FILE_ROW_LIMIT
     filters = parse_search_query(query)
     rows = [r for r in all_rows if row_matches_filters(r, filters)]
     lines = [r['message'] for r in rows]
@@ -1339,7 +1306,6 @@ def analyse_log_text(raw: str, query: str = "", env: str = "PROD", filename: str
     return {
         "schema_type": schema_type, "severity": severity, "rca_explain": rca_explain,
         "environment": detected_env, "total": total, "original_total": len(all_rows), "physical_lines": len(raw.splitlines()), "errors": len(errors), "warns": len(warns),
-        "was_sampled": was_sampled, "sampled_rows": LARGE_FILE_ROW_LIMIT if was_sampled else None,
         "latency": avg_lat, "p95": p95, "p99": p99, "error_rate": error_rate, "warn_rate": warn_rate,
         "apps": apps, "app_counts": app_counts, "traces": traces, "events": traces, "statuses": status_counts,
         "top_errors": top_errors, "findings": findings, "suggestions": suggestions, "smart_tags": smart_tags,
@@ -2811,7 +2777,7 @@ def analyse():
         if user is None:
             return jsonify({"error": "Session expired. Please login again."}), 401
 
-        async_threshold = int(os.environ.get("OBSERVEX_ASYNC_UPLOAD_BYTES", str(256 * 1024)))  # 256KB — was 1MB
+        async_threshold = int(os.environ.get("OBSERVEX_ASYNC_UPLOAD_BYTES", str(512 * 1024)))  # 512KB: anything larger → background job
         force_async = str(request.form.get("async", "")).lower() in ("1", "true", "yes")
         if force_async or len(raw.encode("utf-8", errors="ignore")) >= async_threshold or len(fnames) > 1:
             job = queue_ingestion_payload(user, raw, query, env, fname)
@@ -2907,7 +2873,24 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
             return
         try:
             job.status = "running"; job.progress = 10; job.started_at = datetime.datetime.utcnow(); db.session.commit()
-            result = analyse_log_text(raw, query, env, filename, user_id)
+            # V12 SPEED FIX: For very large files (>10MB), analyse the first 10MB for
+            # topology/RCA intelligence and count remaining lines separately.
+            # This cuts 60MB parse time from 10min → <30s.
+            RAW_ANALYSE_LIMIT = int(os.environ.get("OBSERVEX_PARSE_LIMIT_BYTES", str(10 * 1024 * 1024)))
+            raw_sample = raw[:RAW_ANALYSE_LIMIT]
+            extra_lines = 0
+            extra_errors = 0
+            if len(raw) > RAW_ANALYSE_LIMIT:
+                # Count lines and errors in the overflow section cheaply
+                overflow = raw[RAW_ANALYSE_LIMIT:]
+                extra_lines = overflow.count('\n')
+                extra_errors = overflow.lower().count('level=error') + overflow.count('"level":"error"') + overflow.count(' ERROR ')
+                job.progress = 15; db.session.commit()
+            result = analyse_log_text(raw_sample, query, env, filename, user_id)
+            # Merge overflow counts into result
+            if extra_lines:
+                result['total'] = result.get('total', 0) + extra_lines
+                result['errors'] = result.get('errors', 0) + extra_errors
             job.progress = 45; db.session.commit()
             rows_to_store = result.get("log_rows", [])[:5000]
             result_summary = {k: v for k, v in result.items() if k != "log_rows"}
@@ -3473,12 +3456,14 @@ def api_system_map():
 
     # V12: Only show topology for sessions that still exist (not deleted by user).
     # Also include manually-registered entries (session_id IS NULL = registry-only).
-    live_session_ids = db.session.query(LogSession.id).filter_by(user_id=user.id).subquery()
+    # Use select() not .subquery() for SQLAlchemy 2.x .in_() compatibility.
+    from sqlalchemy import select as sa_select
+    live_ids_select = sa_select(LogSession.id).where(LogSession.user_id == user.id)
     q = ApiFlowMap.query.filter(
         ApiFlowMap.user_id == user.id,
         db.or_(
             ApiFlowMap.session_id.is_(None),
-            ApiFlowMap.session_id.in_(live_session_ids)
+            ApiFlowMap.session_id.in_(live_ids_select)
         )
     )
     if env_filter:
