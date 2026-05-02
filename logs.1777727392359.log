@@ -1,0 +1,59 @@
+2026-05-02T13:08:03.930449219Z [inf]  scheduling build on Metal builder "builder-cbuxkt"
+2026-05-02T13:08:05.140513864Z [inf]  [snapshot] received sha256:60b809b3682128cbc46ee5abd479aad5c6f80ad8707c1f1c82b4da4b05ddb25b md5:7cb5cfc449dd121b87be6501173eb38a
+2026-05-02T13:08:05.140572051Z [inf]  receiving snapshot
+2026-05-02T13:08:05.153915591Z [dbg]  found 'Dockerfile' at 'Dockerfile'
+2026-05-02T13:08:05.153922111Z [dbg]  found 'nixpacks.toml' at 'nixpacks.toml'
+2026-05-02T13:08:05.153924465Z [dbg]  found 'railway.json' at 'railway.json'
+2026-05-02T13:08:05.153993498Z [inf]  analyzing snapshot
+2026-05-02T13:08:05.450589791Z [inf]  uploading snapshot
+2026-05-02T13:08:05.465617306Z [inf]  unpacking archive
+2026-05-02T13:08:05.926648585Z [inf]  [internal] load build definition from Dockerfile
+2026-05-02T13:08:05.926662225Z [inf]  [internal] load build definition from Dockerfile
+2026-05-02T13:08:05.927180492Z [inf]  [internal] load build definition from Dockerfile
+2026-05-02T13:08:05.994684891Z [inf]  [internal] load build definition from Dockerfile
+2026-05-02T13:08:06.007471506Z [inf]  [internal] load metadata for docker.io/library/python:3.11-slim
+2026-05-02T13:08:06.180787559Z [inf]  [internal] load metadata for docker.io/library/python:3.11-slim
+2026-05-02T13:08:06.181609301Z [inf]  [internal] load .dockerignore
+2026-05-02T13:08:06.181729642Z [inf]  [internal] load .dockerignore
+2026-05-02T13:08:06.181738806Z [inf]  [internal] load .dockerignore
+2026-05-02T13:08:06.233625695Z [inf]  [internal] load .dockerignore
+2026-05-02T13:08:06.248474111Z [inf]  [stage-1 5/5] COPY . .
+2026-05-02T13:08:06.248481623Z [inf]  [stage-1 4/5] RUN apt-get update && apt-get install -y --no-install-recommends         libpq5     && rm -rf /var/lib/apt/lists/*
+2026-05-02T13:08:06.248482324Z [inf]  [stage-1 3/5] COPY --from=builder /install /usr/local
+2026-05-02T13:08:06.248482844Z [inf]  [builder 5/5] RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+2026-05-02T13:08:06.248483015Z [inf]  [builder 4/5] COPY requirements.txt .
+2026-05-02T13:08:06.248483165Z [inf]  [internal] load build context
+2026-05-02T13:08:06.248483295Z [inf]  [builder 3/5] RUN apt-get update && apt-get install -y --no-install-recommends         gcc libpq-dev     && rm -rf /var/lib/apt/lists/*
+2026-05-02T13:08:06.248483456Z [inf]  [builder 2/5] WORKDIR /app
+2026-05-02T13:08:06.248483596Z [inf]  [builder 1/5] FROM docker.io/library/python:3.11-slim@sha256:6d85378d88a19cd4d76079817532d62232be95757cb45945a99fec8e8084b9c2
+2026-05-02T13:08:06.248633681Z [inf]  [internal] load build context
+2026-05-02T13:08:06.248768343Z [inf]  [builder 1/5] FROM docker.io/library/python:3.11-slim@sha256:6d85378d88a19cd4d76079817532d62232be95757cb45945a99fec8e8084b9c2
+2026-05-02T13:08:06.249070896Z [inf]  [internal] load build context
+2026-05-02T13:08:06.260877502Z [inf]  [builder 1/5] FROM docker.io/library/python:3.11-slim@sha256:6d85378d88a19cd4d76079817532d62232be95757cb45945a99fec8e8084b9c2
+2026-05-02T13:08:06.261176991Z [inf]  [builder 1/5] FROM docker.io/library/python:3.11-slim@sha256:6d85378d88a19cd4d76079817532d62232be95757cb45945a99fec8e8084b9c2
+2026-05-02T13:08:06.261260986Z [inf]  [builder 1/5] FROM docker.io/library/python:3.11-slim@sha256:6d85378d88a19cd4d76079817532d62232be95757cb45945a99fec8e8084b9c2
+2026-05-02T13:08:06.402029352Z [inf]  [internal] load build context
+2026-05-02T13:08:06.510070118Z [inf]  [builder 2/5] WORKDIR /app
+2026-05-02T13:08:06.510070730Z [inf]  [builder 3/5] RUN apt-get update && apt-get install -y --no-install-recommends         gcc libpq-dev     && rm -rf /var/lib/apt/lists/*
+2026-05-02T13:08:06.510071380Z [inf]  [builder 4/5] COPY requirements.txt .
+2026-05-02T13:08:06.510071531Z [inf]  [builder 5/5] RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+2026-05-02T13:08:06.510071691Z [inf]  [stage-1 3/5] COPY --from=builder /install /usr/local
+2026-05-02T13:08:06.510071841Z [inf]  [stage-1 4/5] RUN apt-get update && apt-get install -y --no-install-recommends         libpq5     && rm -rf /var/lib/apt/lists/*
+2026-05-02T13:08:06.510188626Z [inf]  [stage-1 5/5] COPY . .
+2026-05-02T13:08:06.680905892Z [inf]  [stage-1 5/5] COPY . .
+2026-05-02T13:08:06.703858482Z [inf]  exporting to docker image format
+2026-05-02T13:08:07.364519403Z [inf]  exporting to docker image format
+2026-05-02T13:08:07.542795394Z [inf]  containerimage.digest: sha256:d65f99f5426ffbf01ae71c1afa17137a3023bbe3a962adc5f814886bc4bc71da
+2026-05-02T13:08:07.542810197Z [inf]  containerimage.descriptor: eyJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi92bmQub2NpLmltYWdlLm1hbmlmZXN0LnYxK2pzb24iLCJkaWdlc3QiOiJzaGEyNTY6ZDY1Zjk5ZjU0MjZmZmJmMDFhZTcxYzFhZmExNzEzN2EzMDIzYmJlM2E5NjJhZGM1ZjgxNDg4NmJjNGJjNzFkYSIsInNpemUiOjE4MTgsImFubm90YXRpb25zIjp7Im9yZy5vcGVuY29udGFpbmVycy5pbWFnZS5jcmVhdGVkIjoiMjAyNi0wNS0wMlQxMzowODowNloifSwicGxhdGZvcm0iOnsiYXJjaGl0ZWN0dXJlIjoiYW1kNjQiLCJvcyI6ImxpbnV4In19
+2026-05-02T13:08:07.542814533Z [inf]  containerimage.config.digest: sha256:169a97e0fd82f4548e8ce229e35a23b05a1f6124bae17f627ead229424a78863
+2026-05-02T13:08:19.867061936Z [inf]  image push
+2026-05-02T13:08:19.867148025Z [inf]  image push
+2026-05-02T13:08:25.393915782Z [inf]  
+2026-05-02T13:08:25.393919583Z [inf]  [35m====================
+Starting Healthcheck
+====================
+[0m
+2026-05-02T13:08:25.393920546Z [inf]  [37mPath: /health[0m
+2026-05-02T13:08:25.393921502Z [inf]  [37mRetry window: 1m0s[0m
+2026-05-02T13:08:25.393922310Z [inf]  
+2026-05-02T13:08:26.027532106Z [inf]  [92m[1/1] Healthcheck succeeded![0m

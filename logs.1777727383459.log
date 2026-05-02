@@ -1,0 +1,9 @@
+2026-05-02T13:08:24.984990004Z [inf]  Starting Container
+2026-05-02T13:08:25.873450242Z [err]  [2026-05-02 13:08:25 +0000] [1] [INFO] Starting gunicorn 23.0.0
+2026-05-02T13:08:25.873453350Z [err]  [2026-05-02 13:08:25 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+2026-05-02T13:08:25.873456547Z [err]  [2026-05-02 13:08:25 +0000] [1] [INFO] Using worker: sync
+2026-05-02T13:08:25.873459680Z [err]  [2026-05-02 13:08:25 +0000] [2] [INFO] Booting worker with pid: 2
+2026-05-02T13:08:25.873462545Z [err]  [2026-05-02 13:08:25 +0000] [3] [INFO] Booting worker with pid: 3
+2026-05-02T13:08:25.873465578Z [err]  [2026-05-02 13:08:25 +0000] [3] [INFO] [worker 3] DB pool disposed after fork ✓
+2026-05-02T13:08:25.873468604Z [err]  [2026-05-02 13:08:25 +0000] [2] [INFO] [worker 2] DB pool disposed after fork ✓
+2026-05-02T13:08:25.873472786Z [inf]  100.64.0.2 - - [02/May/2026:13:08:25 +0000] "GET /health HTTP/1.1" 200 16 "-" "RailwayHealthCheck/1.0"
