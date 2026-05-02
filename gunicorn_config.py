@@ -1,8 +1,9 @@
 """
 gunicorn_config.py — ObserveX production gunicorn settings.
 
-FIX v2: post_fork must NOT import 'app' (no Flask context exists at fork time).
-Instead, dispose the underlying SQLAlchemy engine directly via the module.
+SSL POOL FIX: wrap dispose() in app.app_context() so Flask-SQLAlchemy
+can reach db.engine. This works because --preload already imported the
+app module in the parent before forking.
 """
 import os
 
@@ -20,23 +21,23 @@ loglevel  = "info"
 
 def post_fork(server, worker):
     """
-    Dispose the inherited DB connection pool in each forked worker.
-    CRITICAL: Do NOT use 'from app import db' here — no Flask app context
-    exists at fork time, which causes 'Working outside of application context'.
-    Instead, reach the engine via SQLAlchemy's internals.
+    Dispose the inherited connection pool in each worker after fork.
+    Must use app.app_context() because db.engine is Flask-SQLAlchemy
+    and requires an active application context to resolve the engine.
+    close=False: leaves parent-process connections untouched.
     """
     try:
-        # Import the module (already loaded due to --preload), get the engine directly
         import app as _app_module
-        engine = _app_module.db.engine
-        engine.dispose(close=False)   # close=False: don't close parent's connections
-        server.log.info(f"[worker {worker.pid}] DB pool disposed (SSL fix) ✓")
+        with _app_module.app.app_context():
+            _app_module.db.engine.dispose(close=False)
+        server.log.info(f"[worker {worker.pid}] DB pool disposed after fork ✓")
     except Exception as exc:
-        server.log.warning(f"[worker {worker.pid}] post_fork dispose warning: {exc}")
+        server.log.warning(f"[worker {worker.pid}] post_fork warning: {exc}")
 
 def worker_abort(worker):
     try:
         import app as _app_module
-        _app_module.db.engine.dispose()
+        with _app_module.app.app_context():
+            _app_module.db.engine.dispose()
     except Exception:
         pass
