@@ -19,6 +19,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
 from sqlalchemy import text
+from jinja2 import TemplateNotFound
 
 try:
     from authlib.integrations.flask_client import OAuth
@@ -737,6 +738,27 @@ def internal_error(error):
     if request.path.startswith("/analyse") or request.path.startswith("/api/") or request.path in {"/alerts", "/history", "/profile/apikey", "/health"}:
         return jsonify({"error": "Internal server error. Please check Railway logs."}), 500
     return "Internal server error", 500
+
+@app.errorhandler(TemplateNotFound)
+def template_not_found(error):
+    """
+    Prevents a missing template from reaching Chrome as a bare 500.
+    A bare 500 causes Chrome to show chrome-error://chromewebdata/, whose
+    own JS then tries to reload the URL inside a sub-frame and is blocked,
+    producing: "Unsafe attempt to load URL X from frame with URL
+    chrome-error://chromewebdata/. Domains, protocols and ports must match."
+    Redirect to /login so the user lands somewhere meaningful instead.
+    The missing template name is logged so it can be tracked and added to
+    the templates/ directory in the Railway deployment.
+    """
+    app.logger.error(
+        "TemplateNotFound: '%s' — ensure this .html file is included in "
+        "templates/ in your Railway deployment (zip / repo).",
+        error
+    )
+    if request.path.startswith("/api/") or request.accept_mimetypes.accept_json:
+        return jsonify({"error": f"Template not found: {error}. Check Railway logs."}), 500
+    return redirect(url_for("login"))
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_current_user():
