@@ -3328,10 +3328,33 @@ def session_rows(session_id):
         result = json.loads(ls.result_json or "{}")
     except Exception:
         result = {}
+    # V11: If rows weren't stored (fast-upload or async job stored summary-only),
+    # generate synthetic placeholder rows from the aggregate counts so the
+    # frontend dashboard KPI cards show real numbers instead of all-zeros.
+    apps_list = [a for a in (ls.apps_found or "").split(",") if a]
+    if not rows and ls.total_lines:
+        primary_app = apps_list[0] if apps_list else (ls.filename or "unknown")
+        ts = ls.created_at.isoformat() if ls.created_at else ""
+        rows = []
+        # Inject error rows
+        for _ in range(min(ls.error_count or 0, 50)):
+            rows.append({"time": ts, "level": "ERROR", "app": primary_app,
+                         "message": "[restored] error event", "trace": "", "latency": ls.avg_latency or 0, "_synthetic": True})
+        # Inject warn rows
+        for _ in range(min(ls.warn_count or 0, 30)):
+            rows.append({"time": ts, "level": "WARN", "app": primary_app,
+                         "message": "[restored] warn event", "trace": "", "latency": 0, "_synthetic": True})
+        # Fill remaining as INFO up to total_lines (capped at 200 for response size)
+        remaining = min((ls.total_lines or 0) - len(rows), 200)
+        for _ in range(max(0, remaining)):
+            rows.append({"time": ts, "level": "INFO", "app": primary_app,
+                         "message": "[restored] info event", "trace": "", "latency": 0, "_synthetic": True})
+
     result["log_rows"] = rows
     result["session_id"] = ls.id
     result["stored"] = True
     result["reloaded"] = True
+    result["synthetic_rows"] = not bool(json.loads(ls.log_rows_json or "[]"))
     if not result.get("total"):
         result["total"] = ls.total_lines
     if not result.get("errors"):
@@ -3341,7 +3364,7 @@ def session_rows(session_id):
     if not result.get("latency"):
         result["latency"] = ls.avg_latency
     if not result.get("apps"):
-        result["apps"] = [a for a in (ls.apps_found or "").split(",") if a]
+        result["apps"] = apps_list
     return jsonify(result)
 
 
