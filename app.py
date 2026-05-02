@@ -1,12 +1,14 @@
 import os, re, json, hashlib, secrets, datetime, threading, time, warnings
-# Silence authlib joserfc migration warning at OS level (fires before Python-level filter)
-# Must use PYTHONWARNINGS env var so it applies in forked worker processes too
-import os as _os
-_existing = _os.environ.get("PYTHONWARNINGS", "")
-_suppress = "ignore::DeprecationWarning:authlib"
-if _suppress not in _existing:
-    _os.environ["PYTHONWARNINGS"] = (_existing + "," + _suppress).lstrip(",")
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="authlib")
+# Silence authlib joserfc migration warning.
+# AuthlibDeprecationWarning is NOT a plain DeprecationWarning — filtering by base class or
+# PYTHONWARNINGS="ignore::DeprecationWarning:authlib" does NOT suppress it.
+# The only reliable fix is to import and filter the actual class before authlib is loaded.
+try:
+    from authlib.deprecate import AuthlibDeprecationWarning as _AuthlibDepWarn
+    warnings.filterwarnings("ignore", category=_AuthlibDepWarn)
+except ImportError:
+    # authlib not installed — nothing to silence
+    pass
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, jsonify, flash, make_response, abort, Response
@@ -3979,7 +3981,10 @@ Content-Type: application/json
 @app.route("/demo/load", methods=["POST"])
 @login_required
 def demo_load():
-    sample = """INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
+    user = get_current_user()  # FIX: @login_required validates but does not inject `user`
+    # FIX: raw string (r""") prevents \c, \j, \n inside MuleSoft path literals from
+    # being treated as escape sequences, which raised SyntaxWarning in Python 3.12+.
+    sample = r"""INFO 2026-04-27 10:00:00,100 [[MuleRuntime].uber.1: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/1; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: before checkout log {"amount":2499,"checkoutStatus":"Success","customerMobile":"9876543210","orderReference":"ORD-DEMO-12345"}
 ERROR 2026-04-27 10:00:03,450 [[MuleRuntime].uber.2: [demo-checkout-api].post:\checkout:application\json:demo-config.CPU_LITE] [processor: checkout-flow/processors/3; event: demo-trace-001] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: downstream timeout while calling inventory service duration=3350
 WARN 2026-04-27 10:01:04,450 [[MuleRuntime].uber.3: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/2; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: retry started for webhook call duration=1200
 INFO 2026-04-27 10:01:06,150 [[MuleRuntime].uber.4: [demo-notification-api].post:\notify:application\json:demo-config.CPU_LITE] [processor: notify-flow/processors/4; event: demo-trace-002] org.mule.runtime.core.internal.processor.LoggerMessageProcessor: completed in 1700ms status=200

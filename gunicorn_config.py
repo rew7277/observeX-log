@@ -3,9 +3,14 @@ gunicorn_config.py — ObserveX production gunicorn settings v3.
 """
 import os, warnings
 
-# Suppress authlib deprecation at module level (runs in master + each worker)
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="authlib")
-os.environ.setdefault("PYTHONWARNINGS", "ignore::DeprecationWarning:authlib")
+# Suppress authlib joserfc migration warning.
+# AuthlibDeprecationWarning is NOT a subclass of plain DeprecationWarning for filtering
+# purposes via PYTHONWARNINGS or -W flags. Import and filter the actual class instead.
+try:
+    from authlib.deprecate import AuthlibDeprecationWarning as _AuthlibDepWarn
+    warnings.filterwarnings("ignore", category=_AuthlibDepWarn)
+except ImportError:
+    pass
 
 port    = os.environ.get("PORT", "8080")
 bind    = f"0.0.0.0:{port}"

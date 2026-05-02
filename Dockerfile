@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . .
 EXPOSE 8080
 
-# -W suppresses authlib warning at Python interpreter level (applies to all workers)
-ENV PYTHONWARNINGS="ignore::DeprecationWarning:authlib"
-CMD ["python", "-W", "ignore::DeprecationWarning:authlib", "-m", "gunicorn", "app:app", "--config", "gunicorn_config.py"]
+# Warning suppression is handled in gunicorn_config.py and app.py via
+# warnings.filterwarnings() with the actual AuthlibDeprecationWarning class.
+# The PYTHONWARNINGS env var approach does not work for custom Warning subclasses.
+CMD ["python", "-m", "gunicorn", "app:app", "--config", "gunicorn_config.py"]
