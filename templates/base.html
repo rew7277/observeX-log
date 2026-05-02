@@ -69,6 +69,10 @@ label.lbl{display:block;font-weight:600;font-size:12px;color:var(--tx2);margin-b
 
 /* Cards */
 .card{background:var(--sf);border:1px solid var(--bd);border-radius:var(--radius);padding:20px}
+.kpi b,.metric-tile b{display:inline-block;animation:oxCountPop .28s ease both}
+.trend-bar,.mini-bar{animation:oxBarRise .45s cubic-bezier(.19,1,.22,1) both;transform-origin:bottom}
+@keyframes oxCountPop{from{opacity:.35;transform:translateY(5px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes oxBarRise{from{transform:scaleY(.05);opacity:.35}to{transform:scaleY(1);opacity:1}}
 
 /* Badges */
 .badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-weight:700;font-size:11px}
@@ -152,6 +156,7 @@ tr:hover td{background:var(--sf2)}
 /* Tab panels */
 .tab-panel{display:none}.tab-panel.active{display:block}
 </style>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
 </head>
 <body>
 

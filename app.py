@@ -35,13 +35,17 @@ def apply_security_headers(response):
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    # Enterprise CSP: default remains compatible with the existing inline dashboard.
+    # Set OBSERVEX_STRICT_CSP=1 after moving inline templates to static JS to remove unsafe-inline.
+    strict_csp = os.environ.get("OBSERVEX_STRICT_CSP", "").lower() in ("1", "true", "yes")
+    script_src = "script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " if strict_csp else "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; "
     response.headers.setdefault(
         "Content-Security-Policy",
         (
             "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; "
             "img-src 'self' data: blob:; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; "
-            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+            + script_src +
             "connect-src 'self' blob:; "
             "worker-src 'self' blob:; "
             "frame-ancestors 'self';"
@@ -58,6 +62,16 @@ try:
         _REDIS_CLIENT = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
 except Exception:
     _REDIS_CLIENT = None
+
+# Optional durable background queue. In production set REDIS_URL and run:
+#   rq worker observex-ingest
+_RQ_QUEUE = None
+try:
+    if _REDIS_CLIENT is not None:
+        from rq import Queue
+        _RQ_QUEUE = Queue(os.environ.get("OBSERVEX_RQ_QUEUE", "observex-ingest"), connection=_REDIS_CLIENT, default_timeout=int(os.environ.get("OBSERVEX_JOB_TIMEOUT", "1800")))
+except Exception:
+    _RQ_QUEUE = None
 
 def api_rate_limited(key, limit=120, window=60):
     now = int(time.time())
@@ -209,6 +223,51 @@ def lookup_user_by_api_key(raw_key):
         legacy.api_key_last_used = datetime.datetime.utcnow()
         return legacy
     return None
+
+
+_SECRET_FIELD_RE = re.compile(r"(secret|token|password|passwd|apikey|api_key|access_key|private_key|client_secret|connection_string)", re.I)
+
+def _fernet():
+    """Return a Fernet instance when CONNECTOR_SECRET_KEY is configured."""
+    key = os.environ.get("CONNECTOR_SECRET_KEY") or os.environ.get("FERNET_KEY")
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception:
+        app.logger.warning("CONNECTOR_SECRET_KEY is set but invalid or cryptography is unavailable")
+        return None
+
+def encrypt_json_for_db(obj):
+    raw = json.dumps(obj or {}, default=str)
+    f = _fernet()
+    if not f:
+        # Safe fallback: persist only redacted config when encryption is unavailable.
+        return json.dumps(redact_config(obj or {}), default=str)
+    return "fernet:" + f.encrypt(raw.encode("utf-8")).decode("utf-8")
+
+def decrypt_json_from_db(value):
+    text_value = str(value or "{}")
+    if text_value.startswith("fernet:"):
+        f = _fernet()
+        if not f:
+            return {"_encrypted": True, "_display": "Encrypted config hidden. Set CONNECTOR_SECRET_KEY to decrypt."}
+        try:
+            return json.loads(f.decrypt(text_value.split(":", 1)[1].encode("utf-8")).decode("utf-8"))
+        except Exception:
+            return {"_encrypted": True, "_display": "Encrypted config could not be decrypted."}
+    return _json_loads_safe(text_value, {}) or {}
+
+def redact_config(obj):
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out[k] = "••••••" if _SECRET_FIELD_RE.search(str(k)) else redact_config(v)
+        return out
+    if isinstance(obj, list):
+        return [redact_config(x) for x in obj]
+    return obj
 
 def ensure_default_api_key(user):
     if not user:
@@ -2777,9 +2836,18 @@ def maybe_create_incident_from_rows(user_id, rows, env="PROD", session_id=None):
 def queue_ingestion_payload(user, raw, query, env, filename, source="file"):
     job = IngestionJob(user_id=user.id, source=source, filename=filename, status="queued", total_bytes=len(str(raw).encode("utf-8", errors="ignore")))
     db.session.add(job); db.session.commit()
-    threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, filename), daemon=True).start()
+    # Prefer a durable Redis/RQ job so uploads survive Gunicorn worker restarts/deploys.
+    # Local/dev falls back to the previous daemon thread behavior.
+    if _RQ_QUEUE is not None:
+        try:
+            _RQ_QUEUE.enqueue("app.run_ingestion_job", job.id, user.id, raw, query, env, filename, job_timeout=int(os.environ.get("OBSERVEX_JOB_TIMEOUT", "1800")))
+        except Exception:
+            app.logger.exception("RQ enqueue failed; falling back to in-process thread")
+            threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, filename), daemon=True).start()
+    else:
+        threading.Thread(target=run_ingestion_job, args=(job.id, user.id, raw, query, env, filename), daemon=True).start()
     try:
-        audit_event(user, "ingestion.queued", filename, {"job_id": job.id, "environment": env, "bytes": job.total_bytes}); db.session.commit()
+        audit_event(user, "ingestion.queued", filename, {"job_id": job.id, "environment": env, "bytes": job.total_bytes, "queue": "rq" if _RQ_QUEUE is not None else "thread-fallback"}); db.session.commit()
     except Exception:
         db.session.rollback()
     return job
@@ -2853,7 +2921,7 @@ def analyse():
             total_lines=result["total"], error_count=result["errors"],
             warn_count=result["warns"], avg_latency=result["latency"],
             apps_found=",".join(result["apps"]),
-            log_rows_json=json.dumps([_light_row(r) for r in rows_to_store[:2000]], default=str),
+            log_rows_json=json.dumps([_light_row(r) for r in rows_to_store[:250]], default=str),
             result_json=json.dumps(result_summary, default=str),
         )
         db.session.add(ls)
@@ -2941,7 +3009,7 @@ def run_ingestion_job(job_id, user_id, raw, query, env, filename):
                             total_lines=result["total"], error_count=result["errors"],
                             warn_count=result["warns"], avg_latency=result["latency"],
                             apps_found=",".join(result["apps"]),
-                            log_rows_json=json.dumps(rows_to_store, default=str),
+                            log_rows_json=json.dumps(rows_to_store[:250], default=str),
                             result_json=json.dumps(result_summary, default=str))
             db.session.add(ls); db.session.flush()
             job.session_id = ls.id; job.total_lines = result.get("total", 0); job.progress = 60; db.session.commit()
@@ -3059,7 +3127,7 @@ def api_ingest():
         warn_count = result["warns"],
         avg_latency= result["latency"],
         apps_found = ",".join(result["apps"]),
-        log_rows_json=json.dumps(rows_to_store, default=str),
+        log_rows_json=json.dumps(rows_to_store[:250], default=str),
         result_json=json.dumps(result_summary, default=str),
     )
     db.session.add(ls)
@@ -3386,7 +3454,7 @@ def connectors():
             return jsonify({"error":"config must be a JSON object"}), 400
         # Never store common secret fields in connector config. Store them in Railway variables/secrets instead.
         safe_config = {k:v for k,v in config.items() if str(k).lower() not in {"password","secret","token","api_key","access_key","secret_key"}}
-        c = SourceConnector(user_id=user.id, kind=kind, name=name, config_json=json.dumps(safe_config)[:4000])
+        c = SourceConnector(user_id=user.id, kind=kind, name=name, config_json=encrypt_json_for_db(safe_config)[:12000])
         db.session.add(c)
         audit_event(user, "connector.create", c.name, {"kind": c.kind})
         db.session.commit()
@@ -3402,7 +3470,7 @@ def connectors():
     rows = SourceConnector.query.filter_by(user_id=user.id).order_by(SourceConnector.created_at.desc()).all()
     return jsonify([{
         "id": c.id, "kind": c.kind, "name": c.name, "active": c.active,
-        "config": json.loads(c.config_json or "{}"), "at": c.created_at.strftime("%Y-%m-%d %H:%M")
+        "config": redact_config(decrypt_json_from_db(c.config_json or "{}")), "at": c.created_at.strftime("%Y-%m-%d %H:%M")
     } for c in rows])
 
 @app.route("/alert-destinations", methods=["GET", "POST", "DELETE"])
@@ -3436,10 +3504,14 @@ def session_rows(session_id):
     """Return the Postgres-persisted log rows for a previous session."""
     user = get_current_user()
     ls = LogSession.query.filter_by(id=session_id, user_id=user.id).first_or_404()
-    try:
-        rows = json.loads(ls.log_rows_json or "[]")
-    except Exception:
-        rows = []
+    event_rows = LogEvent.query.filter_by(user_id=user.id, session_id=session_id).order_by(LogEvent.id.asc()).limit(int(request.args.get("limit", 5000))).all()
+    if event_rows:
+        rows = [_log_event_to_row(e) for e in event_rows]
+    else:
+        try:
+            rows = json.loads(ls.log_rows_json or "[]")
+        except Exception:
+            rows = []
     try:
         result = json.loads(ls.result_json or "{}")
     except Exception:
@@ -3470,7 +3542,7 @@ def session_rows(session_id):
     result["session_id"] = ls.id
     result["stored"] = True
     result["reloaded"] = True
-    result["synthetic_rows"] = not bool(json.loads(ls.log_rows_json or "[]"))
+    result["synthetic_rows"] = not bool(rows)
     if not result.get("total"):
         result["total"] = ls.total_lines
     if not result.get("errors"):
